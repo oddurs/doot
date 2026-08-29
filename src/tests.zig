@@ -451,6 +451,15 @@ test "a recorded session replays to the same grid" {
     // is that the record lands between the output before it and the output
     // after it.
     try s.resize(60, 12);
+
+    // A second `fullReset`, **after** the resize, and this one is what makes
+    // the `control` record testable at all. `Terminal.resize` throws the
+    // whole scrollback away when `cols` changes, so the only trace the first
+    // reset left -- a shorter history -- was erased three lines above, and
+    // dropping `.full_reset => term.fullReset()` from `replay.zig` changed no
+    // checksum. Nothing below discards state, so this one has to replay.
+    s.fullReset();
+
     try s.send("printf 'AFTER-RESIZE\\n'\n");
     try testing.expect(try s.pumpUntil("AFTER-RESIZE", 400));
 
@@ -480,7 +489,7 @@ test "a recorded session replays to the same grid" {
     try testing.expectEqual(@as(usize, 0), session.redactions());
     try testing.expectEqual(@as(u64, 0), s.rec.stats.redactions);
     // The mutations that never went through the parser are in the file.
-    try testing.expectEqual(@as(usize, 1), session.count(.control));
+    try testing.expectEqual(@as(usize, 2), session.count(.control));
     try testing.expectEqual(@as(usize, 1), session.count(.resize));
     // Input was never asked for, so none of it is here.
     try testing.expectEqual(@as(usize, 0), session.count(.input));
@@ -532,6 +541,49 @@ test "the recording holds the bytes the screen was painted from" {
         if (e.kind == .output) try joined.appendSlice(testing.allocator, e.payload);
     }
     try testing.expect(std.mem.indexOf(u8, joined.items, "UNIQUE-MARKER-9137") != null);
+}
+
+test "a replay refuses a resize record no writer could have produced" {
+    // Records carry no CRC, so one flipped byte in a four-byte payload is a
+    // `Terminal.resize(65535, 65535)` -- 4.3 billion cells, about 68 GB --
+    // from a file the reader was otherwise happy with. The writer is bounded
+    // by `rec.max_dim`; before this the reader bounded nothing.
+    var dir_buf: [256]u8 = undefined;
+    const dir = tempDir(&dir_buf, "geom");
+    defer removeTree(dir);
+
+    var w = try rec.Writer.open(testing.allocator, dir, .{ .cols = 40, .rows = 8 });
+    const path = try testing.allocator.dupe(u8, w.path);
+    defer testing.allocator.free(path);
+    w.output("hello\n", rec.nowNs());
+    w.resize(60, 12, rec.nowNs());
+    w.close(.clean);
+    w.deinit();
+
+    const bytes = try rec.readFile(testing.allocator, path, 64 << 20);
+    defer testing.allocator.free(bytes);
+
+    // Walk the records rather than searching for a byte pattern: a payload
+    // can spell a record header, and a test that patched the wrong four
+    // bytes would pass for the wrong reason.
+    var off: usize = rec.header_len;
+    var payload_at: ?usize = null;
+    while (off + rec.record_header_len <= bytes.len) {
+        const len = std.mem.readInt(u16, bytes[off + 2 ..][0..2], .little);
+        if (bytes[off] == @intFromEnum(rec.Type.resize)) {
+            payload_at = off + rec.record_header_len;
+            break;
+        }
+        off += rec.record_header_len + len;
+    }
+    @memset(bytes[payload_at.?..][0..4], 0xff);
+
+    var session = try rec.parse(testing.allocator, bytes);
+    defer session.deinit(testing.allocator);
+    try testing.expectError(
+        error.GeometryOutOfRange,
+        replay.materialize(testing.allocator, session),
+    );
 }
 
 // -- S6: the privacy rows -------------------------------------------------

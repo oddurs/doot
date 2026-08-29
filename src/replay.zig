@@ -50,6 +50,13 @@ pub fn materialize(alloc: std.mem.Allocator, session: rec.Session) !Terminal {
             if (e.payload.len < 4) continue;
             const cols = std.mem.readInt(u16, e.payload[0..2], .little);
             const rows = std.mem.readInt(u16, e.payload[2..4], .little);
+            // Four bytes with no checksum behind them, handed straight to an
+            // allocator: at `65535 x 65535` this is 68 GB. The writer will
+            // not produce a geometry past `rec.max_dim`, so refusing one is
+            // refusing a file that is wrong rather than one that is large.
+            if (cols > rec.max_dim or rows > rec.max_dim) {
+                return error.GeometryOutOfRange;
+            }
             try term.resize(cols, rows);
         },
         .control => {
@@ -178,8 +185,9 @@ fn endText(s: Summary) []const u8 {
     return switch (s.end_reason orelse .clean) {
         .clean => "cleanly",
         .size_cap => "at the session size cap",
+        // Rare, and not the usual face of a write error: a full disk refuses
+        // this record too, and such a file reads as "not closed" above.
         .write_error => "on a write error",
-        .disabled => "recording was switched off",
         _ => "for a reason this build does not know",
     };
 }

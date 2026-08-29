@@ -68,6 +68,13 @@ const App = struct {
     /// takes the terminal mutex, so the terminal mutex hold is byte for byte
     /// what it was before recording existed. That is the whole point of
     /// sprint 1, and the `lock` column in `--frame-stats` is what says so.
+    ///
+    /// The nested pair are only cheap because `resize`, `focus` and `control`
+    /// are **out-of-band** records: `rec.zig` keeps a reserved tail of the
+    /// write buffer for them, so appending one cannot trigger a `write(2)`.
+    /// Without that reserve a resize that landed on a full buffer performed a
+    /// 64 KiB write inside the terminal mutex -- 2,234-5,578 µs measured, and
+    /// exactly the stall sprint 1 exists to prevent.
     rec_mutex: Mutex,
     rec: rec.Writer,
 
@@ -205,9 +212,14 @@ pub fn main(init: std.process.Init.Minimal) !void {
             // it safe to run while another instance has a session open --
             // that instance's flushes keep its file inside the window.
             _ = rec.sweep(dir, opts.record_retain_days, @divFloor(rec.wallNs(), std.time.ns_per_s));
+            // Clamped to `cli.max_dim`, which is the bound the reader
+            // enforces: a `.trec` claiming a bigger grid is four bytes of
+            // allocation request nothing checked, so neither end will carry
+            // one. `--size` already refuses more, and a window is measured in
+            // cells, so this is not a geometry the renderer can reach.
             app.rec = rec.Writer.open(alloc, dir, .{
-                .cols = @intCast(@min(size.cols, std.math.maxInt(u16))),
-                .rows = @intCast(@min(size.rows, std.math.maxInt(u16))),
+                .cols = @intCast(@min(size.cols, cli.max_dim)),
+                .rows = @intCast(@min(size.rows, cli.max_dim)),
                 .record_input = opts.record_input,
             }) catch |err| blk: {
                 // A session that cannot be recorded is still a session.
@@ -313,8 +325,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
                 // had.
                 app.rec_mutex.lock();
                 app.rec.resize(
-                    @intCast(@min(g.cols, std.math.maxInt(u16))),
-                    @intCast(@min(g.rows, std.math.maxInt(u16))),
+                    @intCast(@min(g.cols, cli.max_dim)),
+                    @intCast(@min(g.rows, cli.max_dim)),
                     stats.nowNs(),
                 );
                 app.rec_mutex.unlock();
@@ -455,9 +467,18 @@ fn stdout(comptime fmt: []const u8, args: anytype) void {
     }
 }
 
-/// Every byte the terminal sends the child goes through here, which is why
-/// the input record is taken here: one call site, so `Writer.input`'s own
-/// `record_input` check is the only gate and no future caller can miss it.
+/// Every byte the terminal sends the child **on the user's behalf** goes
+/// through here, which is why the input record is taken here: one call site,
+/// so `Writer.input`'s own `record_input` check is the only gate and no
+/// future caller can miss it.
+///
+/// Not every byte that goes down the pty. The event loop writes
+/// `term.replies` -- cursor position reports, device attributes -- straight
+/// at the pty, because those are the emulator answering the child, not the
+/// user typing, and recording them as `input` would put bytes the user never
+/// pressed in a file whose whole promise is that keystrokes are opt-in. They
+/// are also already derivable: every one of them is a reply to an `output`
+/// record that is in the file.
 fn sendToPty(app: *App, bytes: []const u8) void {
     if (bytes.len == 0) return;
     app.rec_mutex.lock();

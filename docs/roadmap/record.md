@@ -101,11 +101,19 @@ settings to add later; they are the shape of L0.
 ### L0 — Record every session (two weeks) — the proof
 
 **Done.** See [the sprint record](completed/sprint-l0-record.md). The pty
-drains at 64.4 MiB/s recorded against 66.0 unrecorded (−2.4%, inside the 5%
-the gate allowed) and the worst mutex hold does not move. It moved *down*:
-reproducing sprint 1's 324 µs, as the gate required rather than trusting it,
-found `SDL_SetWindowTitle` inside the terminal mutex, and taking that one
-call out leaves the worst hold at **10–13 µs**.
+drains at a median 66.09 MiB/s recorded against 67.66 unrecorded — **−2.3%**,
+inside the 5% the gate allowed, over three interleaved runs each — and the
+worst mutex hold does not move: 5 µs recorded against 7–40 µs unrecorded. It
+moved *down* from where sprint 1 left it: reproducing that sprint's 324 µs, as
+the gate required rather than trusting it, found `SDL_SetWindowTitle` inside
+the terminal mutex, and taking that one call out leaves the worst hold in
+single digits.
+
+The most useful new figure is the worst single flush: **1,002–2,760 µs** for
+64 KiB, on the reader thread. It is not on the terminal mutex — a reserved
+tail of the write buffer means a `resize` or a `Cmd K` can never trigger one —
+but it is four times what the first pass at this page claimed, and the number
+here is measured rather than remembered.
 
 The redactor now sits in the pty drain path, so it was measured first: 67
 MiB/s, which would have halved the pty rate on its own. A comptime first-byte

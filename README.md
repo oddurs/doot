@@ -25,6 +25,8 @@ and atlas, plus end-to-end tests that drive a real shell on a real PTY and
 assert on the resulting screen. `zig build bench` measures the parse path and
 `zig build gallery` renders the screenshot gallery and diffs it — the two
 arbiters that decide whether a change is an improvement.
+`zig build replay -- SESSION.trec` rebuilds the terminal a recorded session
+ended at and prints its grid checksum.
 
 ## Keys
 
@@ -33,11 +35,38 @@ arbiters that decide whether a change is an improvement.
 | `Cmd` `+` / `-` / `0` | font size |
 | `Cmd V` | paste (bracketed when the app asks for it) |
 | `Cmd K` | clear |
+| `Cmd ⇧ R` | start or stop recording keystrokes, now |
 | wheel | scroll history, or arrow keys on the alternate screen |
 
 Flags: `--font-size N` (6–72), `--size COLSxROWS` (up to 1000 each),
 `--shell PATH`, `--version`, `--frame-stats` (frame timing to stderr, once a
 second), `--screenshot PATH` (save the frame drawn one second in, as a PNG).
+
+## Recording
+
+Every session's **output** is recorded to disk by default, and the window
+title says `● rec` for as long as it is happening — an on-by-default recorder
+is only defensible if it is visible. **Keystrokes are never recorded unless
+you ask**, because keystrokes contain passwords and the stream a program
+printed usually does not. Files are `0600` inside a `0700` directory under
+`~/Library/Application Support/terminator/sessions/`, one per session, swept
+after 14 days, and nothing ever leaves the machine. Secrets in the output —
+API keys, tokens, session ids — are replaced on the way in by `redact.zig`.
+
+| flag | |
+|---|---|
+| `--no-record` | do not record this session |
+| `--incognito` | record nothing, and say so in the title |
+| `--record-input` | record keystrokes too (off unless asked) |
+| `--record-dir PATH` | where recordings go |
+| `--record-retain-days N` | delete recordings older than this (default 14; 0 keeps them forever) |
+
+A recording is an append-only, time-indexed log of every byte the session
+printed, and the screen is a view of it: `zig build replay` rebuilds that
+screen from the file and the end-to-end test asserts the two hash the same.
+[docs/roadmap/record.md](docs/roadmap/record.md) is the plan and
+[the L0 sprint record](docs/roadmap/completed/sprint-l0-record.md) is what
+shipped and what it cost.
 
 ## How it fits together
 
@@ -70,6 +99,9 @@ with no window server at all.
 | `stats.zig` | The `--frame-stats` timer: lock hold, build and drawable wait per frame. |
 | `cli.zig` | Command-line options, and the bounds on anything the renderer will size a window from. |
 | `png.zig` | A small PNG encoder and decoder, so screenshots need no image library. |
+| `rec.zig` | The `.trec` session log: the format, the writer, the reader, the sessions directory and the retention sweep. |
+| `replay.zig` | `.trec` in, `Terminal` out — the screen rebuilt from the log. `zig build replay`. |
+| `check.zig` | `checksum(term)`: a hash over everything a replay has to reproduce. The arbiter. |
 | `record.zig` | Records a command's terminal output, keystrokes and all, as a corpus. |
 | `redact.zig` | Secret shapes, redacted as a recording is written and checked in CI. |
 | `audit.zig` | What the corpora ask a terminal to do, beside what this one does about it. |

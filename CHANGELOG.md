@@ -7,6 +7,30 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Every session is recorded to disk, and it is on by default.** One
+  append-only `.trec` file per session under `~/Library/Application Support/
+  terminator/sessions/`, holding every byte the session printed with the time
+  it arrived. `zig build replay -- SESSION.trec` rebuilds the terminal that
+  file ends at; an end-to-end test asserts the rebuilt grid hashes the same as
+  the live one, which is the claim the whole feature rests on.
+- **It is visible, because on-by-default is only defensible if it is.** The
+  window title reads `● rec` for as long as a session is being recorded, and
+  `● rec+input` when keystrokes are.
+- **Keystrokes are never recorded unless you ask.** `--record-input` or
+  `Cmd ⇧ R` turns it on per window and the title moves in the same frame.
+  Output is what a program printed; keystrokes are what you typed, and those
+  contain passwords.
+- Secrets in the output — API keys, tokens, session ids — are replaced as the
+  file is written, including ones split across two reads off the pty.
+- `--no-record` (off), `--incognito` (off, and the title says so),
+  `--record-dir PATH`, and `--record-retain-days N` (default 14; 0 keeps them
+  forever, swept at startup). Files are `0600` in a `0700` directory, nothing
+  leaves the machine, and `rm` is the whole of deleting a session.
+- `--frame-stats` gained a `record:` line: bytes, records, redactions, flushes
+  and the worst single flush.
+
 ### Changed
 
 - **The renderer is ours.** SDL's 2D renderer is replaced by 396 lines

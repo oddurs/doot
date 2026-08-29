@@ -31,6 +31,26 @@ reporting privately:
 - Denial of service that a short byte sequence triggers — an unbounded
   allocation or a hang from a crafted sequence.
 
+## Session recording
+
+terminator records every session's **output** to disk by default, and says so
+in the window title for as long as it is happening. Keystrokes are never
+recorded unless you ask (`--record-input`, or `Cmd ⇧ R`), `--incognito`
+records nothing, and `--no-record` turns it off. Files are `0600` in a `0700`
+directory, are swept after 14 days, and never leave the machine.
+
+The full privacy shape — what is recorded, what is redacted on the way in,
+where the files live, how long they are kept, and what deleting one actually
+deletes — is
+[the privacy section of docs/roadmap/record.md](docs/roadmap/record.md#privacy-is-the-design),
+and the policy it is held to, with a test per line, is
+[S6 in docs/roadmap/security.md](docs/roadmap/security.md#s6--the-records-privacy-with-l0-then-per-sprint).
+
+A recording that carries a secret it should have redacted, a file or directory
+created with a wider mode than those, a session recorded when the flags said
+not to, or a keystroke in a file that was not asked to hold one, is a
+vulnerability. Report it privately.
+
 ## What is not
 
 - The known gaps listed in the README under "Not done yet". They are missing
