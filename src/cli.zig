@@ -28,6 +28,22 @@ pub const max_dim = 1000;
 pub const min_scale = 0.5;
 pub const max_scale = 4.0;
 
+/// The density to rasterize at and to convert pointer coordinates with: the
+/// display's, unless `--scale` overrode it.
+///
+/// It lives here rather than in `render.zig` because it is a rule about the
+/// flag, and because `render.zig` `@cImport`s SDL and cannot be unit-tested at
+/// all. The rule has to hold **after** `init` as well: a window dragged to a
+/// display of a different density re-measures the density, and every mouse
+/// coordinate is converted with this number, so a renderer that keeps the one
+/// it started with maps clicks to the wrong cells for the rest of the session.
+/// Re-measuring must not discard the override, or a gallery capture told to
+/// pretend it is on a 2x display would stop pretending the first time the
+/// window was measured.
+pub fn effectiveScale(override: ?f32, density: f32) f32 {
+    return override orelse density;
+}
+
 /// How long a recording is kept unless told otherwise. Days, not forever;
 /// 0 means forever. Mirrors `rec.default_retain_days`, which this file
 /// cannot import without importing libc into the pure-`std` unit.
@@ -42,6 +58,23 @@ pub const Options = struct {
     rows: u32 = default_rows,
     /// Pretend the display has this pixel density. Null means ask it.
     scale: ?f32 = null,
+
+    // -- selection ------------------------------------------------------
+
+    /// Copy to the clipboard the moment a drag ends, X11-style. Off by
+    /// default: it makes every drag overwrite whatever was on the clipboard,
+    /// which is a surprise on a Mac. A flag rather than a config key because
+    /// there is no config yet; [K0](../docs/roadmap/config.md) absorbs it.
+    copy_on_select: bool = false,
+    /// `--select R,C,R,C`: select from row R column C to row R column C in
+    /// **viewport** coordinates, zero-based, before the screenshot is taken.
+    /// It exists so the gallery can photograph a highlight -- there is no
+    /// other way to get a selection into a headless capture.
+    select: ?Select = null,
+    /// `--select-rect`: make `--select` a rectangle, the way `Option`-drag
+    /// does. A separate flag rather than a fifth field so the spec keeps its
+    /// shape, and order-independent of `--select`.
+    select_rect: bool = false,
 
     // -- recording ------------------------------------------------------
     //
@@ -71,6 +104,25 @@ pub const Options = struct {
 };
 
 pub const Size = struct { cols: u32, rows: u32 };
+
+/// A viewport-coordinate selection, zero-based and inclusive at both ends --
+/// the same convention `sel.Point` uses.
+pub const Select = struct { r0: u32, c0: u32, r1: u32, c1: u32 };
+
+/// `"R,C,R,C"`, or null when it is not that shape.
+///
+/// Declined whole rather than in part, for the reason `parseSize` is: three
+/// of four numbers is not a selection anyone meant.
+pub fn parseSelect(spec: []const u8) ?Select {
+    var it = std.mem.splitScalar(u8, spec, ',');
+    var n: [4]u32 = undefined;
+    for (&n) |*v| {
+        const field = it.next() orelse return null;
+        v.* = std.fmt.parseInt(u32, field, 10) catch return null;
+    }
+    if (it.next() != null) return null;
+    return .{ .r0 = n[0], .c0 = n[1], .r1 = n[2], .c1 = n[3] };
+}
 
 fn clampDim(n: u32) u32 {
     return std.math.clamp(n, 1, max_dim);
@@ -196,6 +248,10 @@ pub const help =
     \\  --frame-stats   print frame timing to stderr once a second
     \\  --scale N       pretend the display has this pixel density (1, 2)
     \\  --screenshot F  save the frame drawn one second in as a PNG
+    \\  --copy-on-select  copy to the clipboard as soon as a drag ends
+    \\  --select R,C,R,C  select these viewport cells (0-based, inclusive);
+    \\                  for taking a picture of a highlight
+    \\  --select-rect   make --select a rectangle, as Option-drag does
     \\  -V, --version   print the version and the commit it was built from
     \\  -h, --help      this message
     \\
@@ -210,10 +266,16 @@ pub const help =
     \\
     \\Keys:
     \\  Cmd +/-/0       font size
+    \\  Cmd C           copy the selection
     \\  Cmd V           paste
     \\  Cmd K           clear
     \\  Cmd Shift R     start/stop recording keystrokes
     \\  Wheel           scroll history
+    \\
+    \\Mouse:
+    \\  Drag            select; double-click a word, triple-click a line
+    \\  Shift-click     extend the selection
+    \\  Option-drag     select a rectangle
     \\
 ;
 
@@ -268,6 +330,14 @@ pub fn parseArgs(argv: []const [*:0]const u8) Action {
                 opts.cols = size.cols;
                 opts.rows = size.rows;
             }
+        } else if (std.mem.eql(u8, arg, "--copy-on-select")) {
+            opts.copy_on_select = true;
+        } else if (std.mem.eql(u8, arg, "--select")) {
+            i += 1;
+            if (i >= argv.len) break;
+            opts.select = parseSelect(std.mem.span(argv[i])) orelse opts.select;
+        } else if (std.mem.eql(u8, arg, "--select-rect")) {
+            opts.select_rect = true;
         } else if (std.mem.eql(u8, arg, "--no-record")) {
             opts.record = false;
         } else if (std.mem.eql(u8, arg, "--incognito")) {
@@ -352,6 +422,20 @@ test "scale is parsed and bounded" {
     try testing.expectEqual(@as(?f32, null), parseArgs(&bare).run.scale);
     const given = [_][*:0]const u8{ "terminator", "--scale", "2" };
     try testing.expectEqual(@as(?f32, 2.0), parseArgs(&given).run.scale);
+}
+
+test "the effective scale follows the display, and --scale outranks it" {
+    // `Renderer.scale` converts every mouse coordinate, and `updateSize` is
+    // where a window that moved between displays re-measures. Unset, the
+    // answer has to *move* with the display -- keeping the density measured
+    // at startup maps clicks to the wrong cells for the rest of the session.
+    try testing.expectEqual(@as(f32, 1.0), effectiveScale(null, 1.0));
+    try testing.expectEqual(@as(f32, 2.0), effectiveScale(null, 2.0));
+    // Given, it must not move, however often the density is re-measured, or
+    // the gallery's 2x captures would stop pretending on a 1x runner.
+    for ([_]f32{ 1.0, 2.0, 1.0, 3.0 }) |density| {
+        try testing.expectEqual(@as(f32, 2.0), effectiveScale(2.0, density));
+    }
 }
 
 test "argv is parsed into options" {
@@ -531,4 +615,41 @@ test "argv with no arguments at all is a plain run" {
     try testing.expectEqual(@as(u32, default_cols), parseArgs(&bare).run.cols);
     const empty: [0][*:0]const u8 = .{};
     try testing.expectEqual(@as(u32, default_cols), parseArgs(&empty).run.cols);
+}
+
+// -- selection flags ------------------------------------------------------
+
+test "a select spec parses into four viewport coordinates" {
+    const got = parseSelect("3,10,5,20").?;
+    try testing.expectEqual(@as(u32, 3), got.r0);
+    try testing.expectEqual(@as(u32, 10), got.c0);
+    try testing.expectEqual(@as(u32, 5), got.r1);
+    try testing.expectEqual(@as(u32, 20), got.c1);
+    // Zero is a coordinate, not a failure.
+    try testing.expectEqual(Select{ .r0 = 0, .c0 = 0, .r1 = 0, .c1 = 0 }, parseSelect("0,0,0,0").?);
+}
+
+test "a malformed select spec is declined whole" {
+    for ([_][]const u8{ "", "3", "3,10", "3,10,5", "3,10,5,20,7", "a,b,c,d", "3,10,5,-1", "3,,5,20" }) |bad| {
+        try testing.expectEqual(@as(?Select, null), parseSelect(bad));
+    }
+}
+
+test "the selection flags parse, and default off" {
+    const bare = [_][*:0]const u8{"terminator"};
+    const none = parseArgs(&bare).run;
+    try testing.expect(!none.copy_on_select);
+    try testing.expectEqual(@as(?Select, null), none.select);
+
+    try testing.expect(!parseArgs(&[_][*:0]const u8{"terminator"}).run.select_rect);
+    const rect = [_][*:0]const u8{ "terminator", "--select-rect", "--select", "1,2,3,4" };
+    const rect_opts = parseArgs(&rect).run;
+    // Order-independent of `--select`, which is why it is a flag of its own.
+    try testing.expect(rect_opts.select_rect);
+    try testing.expectEqual(@as(u32, 1), rect_opts.select.?.r0);
+
+    const argv = [_][*:0]const u8{ "terminator", "--copy-on-select", "--select", "1,2,3,4" };
+    const opts = parseArgs(&argv).run;
+    try testing.expect(opts.copy_on_select);
+    try testing.expectEqual(@as(u32, 4), opts.select.?.c1);
 }

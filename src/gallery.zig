@@ -30,6 +30,13 @@ const Capture = struct {
     rows: u32,
     font_size: u32,
     scale: u32,
+    /// `--select R,C,R,C` in viewport coordinates, applied before the frame
+    /// is captured. The only way to photograph a highlight: there is no
+    /// mouse under `SDL_VIDEODRIVER=dummy`.
+    select: ?[]const u8 = null,
+    /// `--select-rect`: the same spec read as a rectangle, the way an
+    /// `Option`-drag sets it.
+    select_rect: bool = false,
 };
 
 /// One row per committed PNG. Sizes are chosen so a capture is a few tens
@@ -58,6 +65,62 @@ const captures = [_]Capture{
     // one-pixel change in it shows up as a diff.
     .{ .name = "cursor-14pt-1x", .scene = "cursor", .cols = 48, .rows = 4, .font_size = 14, .scale = 1 },
     .{ .name = "cursor-14pt-2x", .scene = "cursor", .cols = 48, .rows = 4, .font_size = 14, .scale = 2 },
+
+    // E1. One scene, two selections. The first covers all four things the
+    // highlight can get wrong at once: it starts mid-row (so the background
+    // runs have to split around it), runs to the margin of a *wrapped* row
+    // and continues on the next, covers a coloured background that the
+    // selection colour has to win against, and stops inside a reverse-video
+    // run -- so the same run appears reversed and unreversed side by side,
+    // which is the fix for `less`'s status line disappearing while selected.
+    .{
+        .name = "selection-14pt-1x",
+        .scene = "selection",
+        .cols = 48,
+        .rows = 6,
+        .font_size = 14,
+        .scale = 1,
+        .select = "0,9,4,20",
+    },
+    // The second lands both edges on a wide character: the start on a
+    // `.spacer`, which snaps left onto its partner, and the end on a `.wide`,
+    // which extends over the spacer that belongs to it. The highlight is
+    // therefore six cells wide over a four-cell request, covering all three
+    // ideographs whole. At 2x, because half a covered pair is exactly the
+    // sort of thing only a 2x capture shows.
+    //
+    // The ideographs themselves render blank: the face is SFNSMono and there
+    // is no fallback chain yet, which is X2 on the experience roadmap. What
+    // this capture is the arbiter for is the *geometry* of the highlight, and
+    // that is visible either way.
+    .{
+        .name = "selection-wide-14pt-2x",
+        .scene = "selection",
+        .cols = 48,
+        .rows = 6,
+        .font_size = 14,
+        .scale = 2,
+        .select = "3,7,3,10",
+    },
+    // The third is the same columns as a *rectangle*, over three rows, of
+    // which only the last carries the wide pair. An adversarial review found
+    // that rect mode snapped against the start row alone, so every other row
+    // in the block inherited its columns and a pair below could be cut in
+    // half. The columns now widen to the union of what each covered row asks
+    // for, which is the only answer that is both rectangular and free of half
+    // glyphs -- and this capture is what says so: all three rows are
+    // highlighted over the *same* six columns, and the block's edges are
+    // straight.
+    .{
+        .name = "selection-rect-14pt-2x",
+        .scene = "selection",
+        .cols = 48,
+        .rows = 6,
+        .font_size = 14,
+        .scale = 2,
+        .select = "1,7,3,10",
+        .select_rect = true,
+    },
 };
 
 const expected_dir = "bench/gallery/expected";
@@ -142,17 +205,25 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
         cwd.deleteFile(io, out_path) catch {};
 
+        // Built rather than written out, because `--select` is on some
+        // captures and not others.
+        var argv_list: std.ArrayList([]const u8) = .empty;
+        defer argv_list.deinit(gpa);
+        try argv_list.appendSlice(gpa, &.{
+            terminator,    "--shell",     scene_path, "--size", size,
+            "--font-size", font_size,     "--scale",  scale,    "--screenshot",
+            out_path,
+            // A gallery capture is a test, not a session. Without this
+            // every `zig build gallery` drops recordings into the user's
+            // own sessions directory, which is exactly the kind of thing
+            // an on-by-default recorder has to not do.
+                 "--no-record",
+        });
+        if (cap.select) |spec| try argv_list.appendSlice(gpa, &.{ "--select", spec });
+        if (cap.select_rect) try argv_list.append(gpa, "--select-rect");
+
         var child = try std.process.spawn(io, .{
-            .argv = &.{
-                terminator,    "--shell",     scene_path, "--size", size,
-                "--font-size", font_size,     "--scale",  scale,    "--screenshot",
-                out_path,
-                // A gallery capture is a test, not a session. Without this
-                // every `zig build gallery` drops eleven recordings into the
-                // user's own sessions directory, which is exactly the kind
-                // of thing an on-by-default recorder has to not do.
-                     "--no-record",
-            },
+            .argv = argv_list.items,
             .environ_map = &environ,
             // The scenes print and exit; their output is the picture, not
             // something anyone needs to read here.

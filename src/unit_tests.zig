@@ -9,6 +9,7 @@ test {
     _ = @import("vt.zig");
     _ = @import("grid.zig");
     _ = @import("terminal.zig");
+    _ = @import("sel.zig");
     _ = @import("input.zig");
     _ = @import("theme.zig");
     _ = @import("font.zig");

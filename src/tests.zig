@@ -8,6 +8,7 @@ const cli = @import("cli.zig");
 const rec = @import("rec.zig");
 const check = @import("check.zig");
 const replay = @import("replay.zig");
+const sel = @import("sel.zig");
 const Terminal = @import("terminal.zig").Terminal;
 const Pty = @import("pty.zig").Pty;
 
@@ -99,6 +100,30 @@ const Session = struct {
             if (std.mem.indexOf(u8, self.rowText(y, &line), needle) != null) return y;
         }
         return null;
+    }
+
+    // -- selection ------------------------------------------------------
+
+    /// A selection over viewport cells, inclusive at both ends -- the same
+    /// coordinates a click produces.
+    fn selectCells(self: *Session, y0: usize, x0: usize, y1: usize, x1: usize) sel.Selection {
+        return .{
+            .anchor = sel.pointAt(&self.term, .{ .x = x0, .y = y0 }).?,
+            .head = sel.pointAt(&self.term, .{ .x = x1, .y = y1 }).?,
+        };
+    }
+
+    fn copyText(self: *Session, s: sel.Selection) ![:0]u8 {
+        const norm = sel.normalize(&self.term, s) orelse
+            return testing.allocator.dupeZ(u8, "");
+        return sel.extract(testing.allocator, &self.term, norm);
+    }
+
+    /// Which viewport row a resolved ordinal is showing at, as a signed
+    /// number: negative means it has scrolled off the top of the view.
+    fn viewRowOf(self: *Session, ord: usize) isize {
+        return @as(isize, @intCast(ord + self.term.view_offset)) -
+            @as(isize, @intCast(self.term.scrollback.len));
     }
 };
 
@@ -732,4 +757,174 @@ test "S6: deleting a recording is the whole of deleting it" {
     }
     try testing.expectEqual(@as(usize, 1), files);
     try testing.expectError(error.FileNotFound, rec.readFile(testing.allocator, path, 1 << 20));
+}
+
+// ---------------------------------------------------------------------------
+// E1: selection over a real pty
+// ---------------------------------------------------------------------------
+//
+// The arbiter docs/roadmap/essentials.md names for this roadmap is this file:
+// a real shell, a real pty, assertions on the grid. Each test below drives the
+// feature through the shell and fails without it.
+
+/// A shell with echo off and no prompt, so the screen holds the output under
+/// test and nothing else -- a prompt is as long as the working directory's
+/// name, which decides whether a marker wraps on some machines and not others.
+fn quietSession(cols: usize, rows: usize) !Session {
+    var s = try Session.start(cols, rows);
+    errdefer s.deinit();
+    try s.send("PS1=''\n");
+    _ = try s.pumpUntil("\x00", 200);
+    s.term.fullReset();
+    return s;
+}
+
+test "a selection stays on its text while a hundred lines scroll under it" {
+    // The whole point of the line-id primitive, and what the sprint's `yes`
+    // clause means: a selection made before a burst of output covers the same
+    // characters afterwards, having moved down the history by exactly as many
+    // lines as were printed.
+    var s = try quietSession(80, 24);
+    defer s.deinit();
+
+    try s.send("printf 'SELECT-ME-4471\\n'\n");
+    try testing.expect(try s.pumpUntil("SELECT-ME-4471", 400));
+
+    // Selected while it is on screen, which is the only time a user could
+    // have selected it.
+    const marker_row = s.findRow("SELECT-ME-4471") orelse return error.MarkerNotOnScreen;
+    const selection = sel.normalize(&s.term, s.selectCells(marker_row, 0, marker_row, 13)).?;
+    const before = try sel.extract(testing.allocator, &s.term, selection);
+    defer testing.allocator.free(before);
+    try testing.expectEqualStrings("SELECT-ME-4471", before);
+
+    // Fill the screen, so that from here on every completed line pushes
+    // exactly one line into history and the arithmetic below is exact.
+    try s.send("i=1; while [ $i -le 40 ]; do echo FILL$i; i=$((i+1)); done\n");
+    try testing.expect(try s.pumpUntil("FILL40", 800));
+    _ = try s.pumpUntil("\x00", 150);
+
+    const row_before = s.viewRowOf(sel.resolve(&s.term, selection).?.start.ord);
+    const history_before = s.term.scrollback.len;
+
+    // A hundred lines, then a sentinel, then drained to quiet: at that point
+    // 101 lines have been completed and every one of them pushed a line into
+    // history, because the screen was already full.
+    try s.send("i=1; while [ $i -le 100 ]; do echo NOISE$i; i=$((i+1)); done; echo SENTINEL\n");
+    try testing.expect(try s.pumpUntil("SENTINEL", 2000));
+    _ = try s.pumpUntil("\x00", 250);
+
+    const pushed = s.term.scrollback.len - history_before;
+    try testing.expectEqual(@as(usize, 101), pushed);
+
+    // Byte-identical. Not "still finds the marker": the same bytes.
+    const after = try sel.extract(testing.allocator, &s.term, selection);
+    defer testing.allocator.free(after);
+    try testing.expectEqualStrings(before, after);
+
+    // And it is exactly `pushed` rows further back than it was -- the row
+    // index moved, the identity did not.
+    const row_after = s.viewRowOf(sel.resolve(&s.term, selection).?.start.ord);
+    try testing.expectEqual(row_before - @as(isize, @intCast(pushed)), row_after);
+
+    // Scrolling back by that much puts it exactly where it started.
+    s.term.scrollView(@intCast(pushed));
+    try testing.expectEqual(row_before, s.viewRowOf(sel.resolve(&s.term, selection).?.start.ord));
+}
+
+test "a selection across a wrapped line copies it as one line" {
+    // A narrow terminal, so a line the shell prints as one line arrives as
+    // three rows -- and copying it has to give back what the shell printed,
+    // with no newlines the shell never sent.
+    var s = try quietSession(20, 8);
+    defer s.deinit();
+
+    const long = "abcdefghijklmnopqrstuvwxyz0123456789";
+    try s.send("printf '%s\\n' abcdefghijklmnopqrstuvwxyz0123456789\n");
+    try testing.expect(try s.pumpUntil("0123456789", 400));
+
+    const first = s.findRow("abcdefghij") orelse return error.NotOnScreen;
+    const last = s.findRow("0123456789") orelse return error.NotOnScreen;
+    try testing.expect(last > first);
+    // Every row but the last really did wrap, rather than being separate
+    // lines that happen to look like one.
+    for (first..last) |y| try testing.expect(s.term.screen().rowMeta(y).flags.wrapped);
+    try testing.expect(!s.term.screen().rowMeta(last).flags.wrapped);
+
+    const text = try s.copyText(s.selectCells(first, 0, last, 19));
+    defer testing.allocator.free(text);
+    try testing.expectEqualStrings(long, text);
+}
+
+test "a selection across a wide character copies it once, with no spacer" {
+    var s = try quietSession(40, 8);
+    defer s.deinit();
+
+    // Three ideographs between two ASCII markers, printed as UTF-8 bytes.
+    try s.send("printf '[\\344\\270\\200\\344\\272\\214\\344\\270\\211]\\n'\n");
+    try testing.expect(try s.pumpUntil("[", 400));
+    const y = s.findRow("[") orelse return error.NotOnScreen;
+    try testing.expectEqual(grid.Wide.wide, s.term.screen().at(1, y).wide);
+    try testing.expectEqual(grid.Wide.spacer, s.term.screen().at(2, y).wide);
+
+    const text = try s.copyText(s.selectCells(y, 0, y, 7));
+    defer testing.allocator.free(text);
+    try testing.expectEqualStrings("[\u{4e00}\u{4e8c}\u{4e09}]", text);
+
+    // And an edge that lands on a spacer snaps onto the character it belongs
+    // to rather than copying the blank half of it.
+    const half = try s.copyText(s.selectCells(y, 2, y, 2));
+    defer testing.allocator.free(half);
+    try testing.expectEqualStrings("\u{4e00}", half);
+}
+
+test "a selection spanning the scrollback boundary copies both halves" {
+    var s = try quietSession(40, 6);
+    defer s.deinit();
+
+    try s.send("i=1; while [ $i -le 20 ]; do echo ROW$i; i=$((i+1)); done\n");
+    try testing.expect(try s.pumpUntil("ROW20", 800));
+    _ = try s.pumpUntil("\x00", 150);
+    try testing.expect(s.term.scrollback.len > 10);
+
+    // Scroll back so the viewport straddles the boundary: some rows come from
+    // history, the rest from the live screen. One accessor covers both, which
+    // is why this needs no special case in the extractor.
+    s.term.scrollView(3);
+    var buf: [256]u8 = undefined;
+    var want: std.ArrayList(u8) = .empty;
+    defer want.deinit(testing.allocator);
+    for (0..s.term.rows) |y| {
+        if (y > 0) try want.append(testing.allocator, '\n');
+        var n: usize = 0;
+        for (s.term.viewRow(y)) |cell| {
+            if (cell.wide == .spacer) continue;
+            n += std.unicode.utf8Encode(cell.cp, buf[n..]) catch 0;
+        }
+        try want.appendSlice(testing.allocator, std.mem.trimEnd(u8, buf[0..n], " "));
+    }
+
+    const text = try s.copyText(s.selectCells(0, 0, s.term.rows - 1, s.term.cols - 1));
+    defer testing.allocator.free(text);
+    try testing.expectEqualStrings(want.items, text);
+    // Really both halves: the first rows came out of the ring, not the screen.
+    try testing.expect(std.mem.indexOf(u8, text, "ROW") != null);
+}
+
+test "a program taking the alt screen clears the selection" {
+    var s = try quietSession(40, 8);
+    defer s.deinit();
+
+    try s.send("printf 'PRIMARY-TEXT\\n'\n");
+    try testing.expect(try s.pumpUntil("PRIMARY-TEXT", 400));
+    const y = s.findRow("PRIMARY-TEXT") orelse return error.NotOnScreen;
+    s.term.setSelection(s.selectCells(y, 0, y, 11));
+    try testing.expect(s.term.selection != null);
+
+    // What vim, less and htop all do on the way in. The alt screen is a
+    // different set of lines, so a highlight left behind would be sitting
+    // over text that is not the text it was taken from.
+    try s.send("printf '\\033[?1049hALT\\n'\n");
+    try testing.expect(try s.pumpUntil("ALT", 400));
+    try testing.expect(s.term.selection == null);
 }

@@ -20,6 +20,7 @@ const render = @import("render.zig");
 const stats = @import("stats.zig");
 const cli = @import("cli.zig");
 const rec = @import("rec.zig");
+const sel = @import("sel.zig");
 const version = @import("version.zig");
 const Terminal = @import("terminal.zig").Terminal;
 const Pty = @import("pty.zig").Pty;
@@ -93,6 +94,33 @@ const App = struct {
         ev.type = self.wake_event;
         _ = c.SDL_PushEvent(&ev);
     }
+};
+
+/// What a drag knows between events.
+///
+/// Everything it decides is computed in `sel.zig`; this is the four values a
+/// press has to remember until the release, and nothing here branches on
+/// terminal state.
+const Mouse = struct {
+    /// The button is down and the selection is ours to paint.
+    dragging: bool = false,
+    /// The pointer has moved since the press. A press and release with no
+    /// movement in between is a click, and a click clears the selection
+    /// rather than making a one-cell one.
+    moved: bool = false,
+    anchor: ?sel.Point = null,
+    mode: sel.Mode = .character,
+    rect: bool = false,
+    /// Rows to scroll per tick while dragging past the edge of the grid, as
+    /// the argument to `scrollView`. **Zero whenever the pointer is over the
+    /// grid**, which is what keeps an idle terminal on `SDL_WaitEvent` rather
+    /// than a 16 ms poll -- the event loop only takes the timeout while this
+    /// is non-zero.
+    autoscroll: isize = 0,
+    /// Where the pointer was last seen, in device pixels. An autoscroll tick
+    /// has no event of its own, so it re-derives the head from this: the row
+    /// under a stationary pointer is a different line once the view moves.
+    px: struct { x: i32 = 0, y: i32 = 0 } = .{},
 };
 
 fn readerThread(app: *App) void {
@@ -263,15 +291,26 @@ pub fn main(init: std.process.Init.Minimal) !void {
     // one that frees it, and defers run in reverse.
     defer frame_stats.reportTotals(app.bytes_read.load(.monotonic), recordTotals(&app));
 
+    var mouse: Mouse = .{};
+
     while (app.running.load(.acquire)) {
         var ev: c.SDL_Event = undefined;
         // Block until something happens. The reader thread's wake event and
         // the OS's input events both land here, so we never spin.
-        if (!c.SDL_WaitEvent(&ev)) break;
+        //
+        // The one exception is a drag that has left the grid: autoscroll has
+        // no event source of its own, so it needs a clock. The timeout is
+        // taken *only* while `mouse.autoscroll` is non-zero, which is only
+        // while a button is held outside the grid -- an idle terminal, and a
+        // drag inside the grid, still wake exactly as often as before.
+        var have_event = true;
+        if (mouse.autoscroll != 0) {
+            have_event = c.SDL_WaitEventTimeout(&ev, 16);
+        } else if (!c.SDL_WaitEvent(&ev)) break;
 
         var redraw = false;
         var resized = false;
-        while (true) {
+        while (have_event) {
             if (ev.type == app.wake_event) {
                 app.wake_queued.store(false, .release);
                 redraw = true;
@@ -306,9 +345,28 @@ pub fn main(init: std.process.Init.Minimal) !void {
                     handleWheel(&app, ev.wheel);
                     redraw = true;
                 },
+                c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
+                    handleMouseDown(&app, &renderer, &mouse, ev.button);
+                    redraw = true;
+                },
+                c.SDL_EVENT_MOUSE_MOTION => {
+                    if (handleMouseMotion(&app, &renderer, &mouse, ev.motion)) redraw = true;
+                },
+                c.SDL_EVENT_MOUSE_BUTTON_UP => {
+                    handleMouseUp(&app, &mouse, opts, alloc, ev.button);
+                    redraw = true;
+                },
                 else => {},
             }
             if (!c.SDL_PollEvent(&ev)) break;
+        }
+
+        // An autoscroll tick: move the view one step and re-derive the head
+        // from where the pointer is, because the row under it is a different
+        // line now.
+        if (mouse.autoscroll != 0 and mouse.dragging) {
+            autoscrollStep(&app, &renderer, &mouse);
+            redraw = true;
         }
 
         if (resized) {
@@ -376,6 +434,11 @@ pub fn main(init: std.process.Init.Minimal) !void {
         // Copy the frame out under the lock; draw and present it after. The
         // present waits for vblank, and with it inside the lock the reader
         // could not feed a byte for the whole of every frame.
+        // `--select`, re-applied every frame so it survives the shell's
+        // output arriving underneath it. Under the lock, immediately before
+        // the snapshot that photographs it.
+        if (opts.select) |spec| applySelect(&app.term, spec, opts.select_rect);
+
         var draw_frame = false;
         if (dirty) {
             draw_frame = true;
@@ -445,6 +508,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     // are gone in milliseconds.
     if (renderer.screenshot_path != null) {
         renderer.screenshot_after_ns = 0;
+        if (opts.select) |spec| applySelect(&app.term, spec, opts.select_rect);
         renderer.snapshot(&app.term) catch {};
         _ = renderer.draw();
     }
@@ -510,6 +574,12 @@ fn handleKey(
     // Command-key shortcuts belong to the app, not the shell.
     if (cmd) {
         switch (key.key) {
+            c.SDLK_C => {
+                // With no selection this does nothing at all -- deliberately
+                // not "copy the screen" or "send SIGINT", both of which have
+                // been someone's idea of what an empty Cmd C should do.
+                copySelection(app, alloc);
+            },
             c.SDLK_V => {
                 if (c.SDL_GetClipboardText()) |text| {
                     defer c.SDL_free(text);
@@ -583,6 +653,191 @@ fn handleKey(
     var buf: [32]u8 = undefined;
     if (input.encode(&buf, mapped, m, app_cursor)) |bytes| sendToPty(app, bytes);
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// The mouse
+// ---------------------------------------------------------------------------
+//
+// Glue only. Everything below hands numbers to `sel.zig` and puts the answer
+// back: the pixel arithmetic, the word boundaries, the wide-character
+// snapping and the extraction rules are all there, where they are unit-tested
+// without a window. If a function here grows a decision, it is in the wrong
+// file.
+
+/// The grid geometry `sel` needs. Call with the terminal mutex held.
+fn metricsOf(app: *App, renderer: *const render.Renderer) sel.Metrics {
+    return renderer.cellMetrics(app.term.cols, app.term.rows);
+}
+
+fn handleMouseDown(
+    app: *App,
+    renderer: *render.Renderer,
+    mouse: *Mouse,
+    ev: c.SDL_MouseButtonEvent,
+) void {
+    if (ev.button != c.SDL_BUTTON_LEFT) return;
+    // `SDL_MouseButtonEvent` carries no modifier field, so the keyboard has
+    // to be asked directly.
+    const mods = c.SDL_GetModState();
+    const shift = mods & c.SDL_KMOD_SHIFT != 0;
+    const option = mods & c.SDL_KMOD_ALT != 0;
+    const px = renderer.toPixels(ev.x, ev.y);
+    mouse.px = .{ .x = px.x, .y = px.y };
+
+    app.mutex.lock();
+    defer app.mutex.unlock();
+
+    // The application owns the mouse. E2 fills this branch in; until it does,
+    // the only thing that matters is that we do **not** start a selection --
+    // otherwise the day a drag inside vim starts being forwarded, it will
+    // both scroll vim and paint a highlight over it.
+    if (sel.mouseOwner(&app.term, shift) == .child) return;
+
+    const coord = sel.cellAt(metricsOf(app, renderer), px.x, px.y);
+    const point = sel.pointAt(&app.term, coord) orelse return;
+
+    // Shift-click extends the existing selection from its anchor rather than
+    // starting a new one.
+    if (shift) {
+        if (app.term.selection) |existing| {
+            var next = existing;
+            next.head = point;
+            app.term.setSelection(next);
+            mouse.* = .{
+                .dragging = true,
+                .moved = true,
+                .anchor = next.anchor,
+                .mode = next.mode,
+                .rect = next.rect,
+                .px = mouse.px,
+            };
+            return;
+        }
+    }
+
+    const mode = sel.modeForClicks(ev.clicks);
+    mouse.* = .{
+        .dragging = true,
+        // A double or triple click selects on the press: there is no drag to
+        // wait for, and waiting would make the word flash and vanish.
+        .moved = mode != .character,
+        .anchor = point,
+        .mode = mode,
+        .rect = option,
+        .px = mouse.px,
+    };
+    if (mode == .character) {
+        // A press replaces whatever was selected. Whether it produces a new
+        // selection is decided by whether the pointer moves before the
+        // release -- a click with no drag selects nothing.
+        app.term.clearSelection();
+    } else {
+        app.term.setSelection(.{
+            .anchor = point,
+            .head = point,
+            .mode = mode,
+            .rect = option,
+        });
+    }
+}
+
+/// Returns whether the frame needs redrawing. Motion with no button down is
+/// the most frequent event a window gets, so it must cost nothing.
+fn handleMouseMotion(
+    app: *App,
+    renderer: *render.Renderer,
+    mouse: *Mouse,
+    ev: c.SDL_MouseMotionEvent,
+) bool {
+    if (!mouse.dragging) return false;
+    const anchor = mouse.anchor orelse return false;
+    const px = renderer.toPixels(ev.x, ev.y);
+    mouse.px = .{ .x = px.x, .y = px.y };
+
+    app.mutex.lock();
+    defer app.mutex.unlock();
+    const m = metricsOf(app, renderer);
+    mouse.autoscroll = sel.autoscroll(m, px.y);
+    const head = sel.pointAt(&app.term, sel.cellAt(m, px.x, px.y)) orelse return false;
+    mouse.moved = true;
+    app.term.setSelection(.{
+        .anchor = anchor,
+        .head = head,
+        .mode = mouse.mode,
+        .rect = mouse.rect,
+    });
+    return true;
+}
+
+fn handleMouseUp(
+    app: *App,
+    mouse: *Mouse,
+    opts: cli.Options,
+    alloc: std.mem.Allocator,
+    ev: c.SDL_MouseButtonEvent,
+) void {
+    if (ev.button != c.SDL_BUTTON_LEFT) return;
+    const was_dragging = mouse.dragging;
+    const moved = mouse.moved;
+    mouse.* = .{};
+    // Copy-on-select does **not** clear the selection: it is a convenience
+    // for pasting elsewhere, not a different way of ending a drag.
+    if (was_dragging and moved and opts.copy_on_select) copySelection(app, alloc);
+}
+
+/// One autoscroll tick: move the view, then re-derive the head, because the
+/// line under a stationary pointer changed when the view did.
+fn autoscrollStep(app: *App, renderer: *render.Renderer, mouse: *Mouse) void {
+    const anchor = mouse.anchor orelse return;
+    app.mutex.lock();
+    defer app.mutex.unlock();
+    app.term.scrollView(mouse.autoscroll);
+    const m = metricsOf(app, renderer);
+    const head = sel.pointAt(&app.term, sel.cellAt(m, mouse.px.x, mouse.px.y)) orelse return;
+    app.term.setSelection(.{
+        .anchor = anchor,
+        .head = head,
+        .mode = mouse.mode,
+        .rect = mouse.rect,
+    });
+}
+
+/// The selection onto the system pasteboard. Does nothing when there is no
+/// selection, or when what it covers is empty.
+fn copySelection(app: *App, alloc: std.mem.Allocator) void {
+    app.mutex.lock();
+    const text: ?[:0]u8 = if (app.term.selection) |s|
+        sel.extract(alloc, &app.term, s) catch null
+    else
+        null;
+    app.mutex.unlock();
+
+    const t = text orelse return;
+    defer alloc.free(t);
+    if (t.len == 0) return;
+    _ = c.SDL_SetClipboardText(t.ptr);
+}
+
+/// `--select R,C,R,C`. Call with the terminal mutex held.
+///
+/// Re-applied every frame rather than once, so it still describes the same
+/// cells after the scene's own output has arrived. `setSelection` normalizes
+/// and only marks the terminal dirty when the result actually moved, so this
+/// does not turn into a repaint loop.
+fn applySelect(term: *Terminal, spec: cli.Select, rect: bool) void {
+    if (term.rows == 0 or term.cols == 0) return;
+    const at = struct {
+        fn f(t: *Terminal, r: u32, col: u32) ?sel.Point {
+            return sel.pointAt(t, .{
+                .x = @min(@as(usize, col), t.cols - 1),
+                .y = @min(@as(usize, r), t.rows - 1),
+            });
+        }
+    }.f;
+    const a = at(term, spec.r0, spec.c0) orelse return;
+    const h = at(term, spec.r1, spec.c1) orelse return;
+    term.setSelection(.{ .anchor = a, .head = h, .rect = rect });
 }
 
 fn handleWheel(app: *App, wheel: c.SDL_MouseWheelEvent) void {

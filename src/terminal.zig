@@ -10,6 +10,7 @@
 const std = @import("std");
 const grid = @import("grid.zig");
 const vt = @import("vt.zig");
+const sel = @import("sel.zig");
 
 const Cell = grid.Cell;
 const Color = grid.Color;
@@ -40,8 +41,17 @@ pub const Modes = struct {
     /// Bracketed paste (2004) -- pasted text is wrapped in markers so the
     /// shell can tell it apart from typing.
     bracketed_paste: bool = false,
-    /// Any of the xterm mouse-reporting modes is on.
+    /// A mouse *tracking* mode is on: 1000 (click), 1002 (button-event) or
+    /// 1003 (any-event). The application owns the pointer while this is set,
+    /// which is what `sel.mouseOwner` consults.
     mouse: bool = false,
+    /// The SGR (1006) or urxvt (1015) *encoding* is selected. An encoding is
+    /// not a tracking mode: these two used to be folded into `mouse`, so an
+    /// application that sent `ESC[?1006h` on its own -- which many do, before
+    /// or without ever asking for tracking -- silently took the mouse away
+    /// from the user and disabled selection. E2 reads this to pick the wire
+    /// format; nothing else should branch on it.
+    mouse_sgr: bool = false,
 };
 
 pub const Terminal = struct {
@@ -81,12 +91,41 @@ pub const Terminal = struct {
     dirty: bool = true,
     bell: bool = false,
 
+    // The two E1 fields are **last on purpose**. Everything above is what the
+    // parse path touches on every byte, and putting a counter and a
+    // forty-byte optional in front of `cursor` and `modes` moved them across
+    // a cache line: 25% of the `ascii` corpus and 35% of `scroll`, measured,
+    // for two fields the hot path never reads.
+
+    /// The next line id to hand out. **One counter for both screens and the
+    /// scrollback**, so every id in the terminal is disjoint from every other
+    /// and a selection anchor can never resolve onto an alt-screen row that
+    /// happens to share a number with the primary row it was taken from.
+    ///
+    /// Ids are *stored*, never derived from a base: `IL`, `DL` and a DECSTBM
+    /// region scroll splice rows into the middle of the screen, so anything
+    /// computed as "base plus offset" silently relabels every row below the
+    /// splice. It starts at 1 because `RowMeta.id == 0` means "no line".
+    ///
+    /// Never reset -- `fullReset` deliberately leaves it alone. Reusing a
+    /// number after a reset is the one way a stale anchor could resolve onto
+    /// a live row.
+    next_line_id: u64 = 1,
+
+    /// What the user has selected, or null. Anchored to line ids, so it
+    /// survives the ring rotating, a scrollback push and the viewport
+    /// snapping back to the bottom. See `src/sel.zig`; the policy for when it
+    /// is cleared is in `setSelection`'s callers and `clearSelection` below.
+    selection: ?sel.Selection = null,
+
     pub fn init(alloc: std.mem.Allocator, cols: usize, rows: usize) !Terminal {
         const c = @max(cols, 1);
         const r = @max(rows, 1);
-        var primary = try Screen.init(alloc, c, r);
+        // Disjoint id ranges from the first row onwards: primary 1..r, alt
+        // r+1..2r, and the counter carries on from there.
+        var primary = try Screen.init(alloc, c, r, 1);
         errdefer primary.deinit(alloc);
-        var alt = try Screen.init(alloc, c, r);
+        var alt = try Screen.init(alloc, c, r, 1 + r);
         errdefer alt.deinit(alloc);
         var sb = try grid.Scrollback.init(alloc, c, scrollback_lines);
         errdefer sb.deinit(alloc);
@@ -101,6 +140,7 @@ pub const Terminal = struct {
             .scrollback = sb,
             .scroll_bot = r - 1,
             .tabstops = tabs,
+            .next_line_id = 1 + 2 * r,
         };
         self.resetTabstops();
         return self;
@@ -130,6 +170,61 @@ pub const Terminal = struct {
         for (self.tabstops, 0..) |*t, i| t.* = (i % 8 == 0 and i != 0);
     }
 
+    // -- line identity ------------------------------------------------------
+    //
+    // `grid.zig` stores ids and stamps the ones it is given; the policy of
+    // where they come from is here, because grid holds none.
+    //
+    // Every mutator takes the first id to stamp and **returns how many it
+    // used**, and the counter is advanced by that return rather than by a
+    // number predicted at the call site. That is deliberate:
+    // `Screen.scrollUp`'s `n >= height` branch clears the whole region and so
+    // stamps `height` rows, not `n`, and a call site that guessed `n` would
+    // hand two rows the same id -- invisible until a selection anchored to
+    // one of them resolved onto the other.
+    //
+    // **The four wrappers below are `inline`, and that is load-bearing.**
+    // `lineFeed` calls `scrollUp` with a literal `n = 1`, and LLVM specializes
+    // the whole of `Screen.scrollUp` on it -- the `n >= height` branch folds
+    // away and the clear becomes a single row. Behind an ordinary function
+    // `n` is a runtime parameter and all of that is lost: measured, these
+    // four one-line wrappers cost **26% of `ascii` and 36% of `scroll`**
+    // before the `inline` went on. Nothing about the ids was responsible; the
+    // benchmark found it and the profile did not, which is why the rule is to
+    // measure before and after.
+
+    /// Reserve `n` ids and return the first.
+    fn mint(self: *Terminal, n: usize) u64 {
+        const first = self.next_line_id;
+        self.next_line_id += n;
+        return first;
+    }
+
+    inline fn scrollScreenUp(self: *Terminal, top: usize, bot: usize, n: usize) void {
+        const first = self.next_line_id;
+        self.next_line_id += self.screen().scrollUp(top, bot, n, self.blankCell(), first);
+    }
+
+    inline fn scrollScreenDown(self: *Terminal, top: usize, bot: usize, n: usize) void {
+        const first = self.next_line_id;
+        self.next_line_id += self.screen().scrollDown(top, bot, n, self.blankCell(), first);
+    }
+
+    inline fn clearScreenRows(self: *Terminal, top: usize, bot: usize) void {
+        const first = self.next_line_id;
+        self.next_line_id += self.screen().clearRows(top, bot, self.blankCell(), first);
+    }
+
+    inline fn fillScreen(self: *Terminal, s: *Screen, cell: Cell) void {
+        const first = self.next_line_id;
+        self.next_line_id += s.fill(cell, first);
+    }
+
+    /// The row the cursor is on, as the selection and reflow see it.
+    fn cursorMeta(self: *Terminal) *grid.RowMeta {
+        return self.screen().rowMeta(self.cursor.y);
+    }
+
     // -- geometry -----------------------------------------------------------
 
     pub fn resize(self: *Terminal, cols: usize, rows: usize) !void {
@@ -140,13 +235,18 @@ pub const Terminal = struct {
         // Reflow is a genuinely hard problem (it interacts with wrapped-line
         // tracking and scrollback rewriting). For now we preserve content by
         // top-left anchoring, which is what most terminals did for years.
-        var new_primary = try Screen.init(self.alloc, c, r);
-        var new_alt = try Screen.init(self.alloc, c, r);
+        var new_primary = try Screen.init(self.alloc, c, r, self.mint(r));
+        var new_alt = try Screen.init(self.alloc, c, r, self.mint(r));
         const copy_rows = @min(r, self.rows);
         const copy_cols = @min(c, self.cols);
         for (0..copy_rows) |y| {
             @memcpy(new_primary.row(y)[0..copy_cols], self.primary.row(y)[0..copy_cols]);
             @memcpy(new_alt.row(y)[0..copy_cols], self.alt.row(y)[0..copy_cols]);
+            // A row that survives the resize keeps its identity, so a
+            // selection survives a height change. The fresh ids stamped by
+            // `Screen.init` stand for the rows that did not survive.
+            new_primary.rowMeta(y).* = self.primary.rowMeta(y).*;
+            new_alt.rowMeta(y).* = self.alt.rowMeta(y).*;
         }
         self.primary.deinit(self.alloc);
         self.alt.deinit(self.alloc);
@@ -159,6 +259,12 @@ pub const Terminal = struct {
             self.scrollback = sb;
             self.alloc.free(self.tabstops);
             self.tabstops = try self.alloc.alloc(bool, c);
+            // The history the selection may have been anchored in has just
+            // been thrown away, and every surviving row has been truncated
+            // to a new width -- so the columns the selection named no longer
+            // mean what they meant. Reflow (E4) is what makes this
+            // survivable; until then, clearing is the honest answer.
+            self.selection = null;
         }
 
         self.cols = c;
@@ -181,7 +287,7 @@ pub const Terminal = struct {
 
         if (self.pending_wrap and self.modes.wrap) {
             self.cursor.x = 0;
-            self.lineFeed();
+            self.wrapLineFeed();
         }
         self.pending_wrap = false;
 
@@ -189,8 +295,11 @@ pub const Terminal = struct {
             if (!self.modes.wrap) {
                 self.cursor.x = self.cols - w;
             } else {
+                // A wide character that does not fit in the last column
+                // wraps too, and the row it leaves is just as wrapped as one
+                // that ran off the margin a character at a time.
                 self.cursor.x = 0;
-                self.lineFeed();
+                self.wrapLineFeed();
             }
         }
 
@@ -240,7 +349,7 @@ pub const Terminal = struct {
         while (rest.len > 0) {
             if (self.pending_wrap) {
                 self.cursor.x = 0;
-                self.lineFeed();
+                self.wrapLineFeed();
             }
             const row = self.screen().row(self.cursor.y);
             const n = @min(self.cols - self.cursor.x, rest.len);
@@ -276,10 +385,19 @@ pub const Terminal = struct {
             },
             0x09 => self.tabForward(1), // HT
             0x0a, 0x0b, 0x0c => { // LF, VT, FF
+                // An explicit line feed ends the line, so whatever wrapped
+                // the row before is no longer true of it. Clearing here and
+                // not in `lineFeed` is the point: `lineFeed` is also how a
+                // *wrap* moves to the next row, and clearing there would
+                // undo the flag `wrapLineFeed` had just set.
+                self.endLine();
                 self.lineFeed();
                 self.markDirty();
             },
             0x0d => { // CR
+                // Deliberately does *not* clear `wrapped`: a carriage return
+                // moves within the line, it does not end it. `printf 'a\rb'`
+                // on a wrapped row must still join to the row below.
                 self.cursor.x = 0;
                 self.pending_wrap = false;
                 self.markDirty();
@@ -292,8 +410,12 @@ pub const Terminal = struct {
         // Charset designators (ESC ( B and friends) -- we're UTF-8 only.
         if (intermediates.len > 0) return;
         switch (final) {
-            'D' => self.lineFeed(), // IND
+            'D' => { // IND
+                self.endLine();
+                self.lineFeed();
+            },
             'E' => { // NEL
+                self.endLine();
                 self.cursor.x = 0;
                 self.lineFeed();
             },
@@ -358,14 +480,18 @@ pub const Terminal = struct {
             'L' => self.insertLines(csi.get(0, 1)),
             'M' => self.deleteLines(csi.get(0, 1)),
             'P' => { // DCH
+                // Shifting left always blanks the tail, so the character at
+                // the margin is gone and this row no longer runs into the
+                // next. `ICH` below is the opposite case and stays.
+                self.endLine();
                 self.screen().deleteCells(self.cursor.x, self.cursor.y, csi.get(0, 1), self.blankCell());
             },
             '@' => { // ICH
                 self.screen().insertCells(self.cursor.x, self.cursor.y, csi.get(0, 1), self.blankCell());
             },
             'X' => self.eraseChars(csi.get(0, 1)), // ECH
-            'S' => self.screen().scrollUp(self.scroll_top, self.scroll_bot, csi.get(0, 1), self.blankCell()),
-            'T' => self.screen().scrollDown(self.scroll_top, self.scroll_bot, csi.get(0, 1), self.blankCell()),
+            'S' => self.scrollScreenUp(self.scroll_top, self.scroll_bot, csi.get(0, 1)),
+            'T' => self.scrollScreenDown(self.scroll_top, self.scroll_bot, csi.get(0, 1)),
             'm' => self.selectGraphicRendition(csi),
             'r' => self.setScrollRegion(csi),
             'h' => self.setMode(csi, true),
@@ -428,20 +554,52 @@ pub const Terminal = struct {
     fn lineFeed(self: *Terminal) void {
         if (self.cursor.y == self.scroll_bot) {
             // Only the primary screen has history; the alt screen is for
-            // full-screen apps, which manage their own repaint.
+            // full-screen apps, which manage their own repaint. The row's
+            // metadata goes with its cells, or a selection anchored to a line
+            // stops resolving the instant that line scrolls off -- which is
+            // the case E1 exists for.
             if (!self.on_alt and self.scroll_top == 0) {
-                self.scrollback.push(self.primary.row(0));
+                self.scrollback.push(self.primary.row(0), self.primary.rowMeta(0).*);
             }
-            self.screen().scrollUp(self.scroll_top, self.scroll_bot, 1, self.blankCell());
+            self.scrollScreenUp(self.scroll_top, self.scroll_bot, 1);
         } else if (self.cursor.y + 1 < self.rows) {
             self.cursor.y += 1;
         }
         self.pending_wrap = false;
     }
 
+    /// The line feed a *wrap* performs: the row being left behind ends
+    /// because the text ran off the right margin, so it is marked before it
+    /// is left. Marking it after would mark the row arriving underneath --
+    /// and on a full screen `lineFeed` scrolls, so "the current row" is not
+    /// even the same row on the way out.
+    fn wrapLineFeed(self: *Terminal) void {
+        self.cursorMeta().flags.wrapped = true;
+        self.lineFeed();
+    }
+
+    /// This row ends here, whatever put the cursor on it.
+    ///
+    /// `wrapped` means one thing: *the character at the right margin ran on
+    /// into the row below*. So the rule is the cell at the right margin, and
+    /// nothing wider: `LF`, `IND` and `NEL` end the line outright, `EL 0`,
+    /// `EL 2`, `ED 0` and `ED 2` blank the margin, `ECH` ends it only when it
+    /// reaches the margin, and `DCH` always does because shifting left blanks
+    /// the tail. `EL 1`, `ED 1` and `CR` leave the margin alone and so leave
+    /// the flag alone.
+    ///
+    /// `ICH` is the one deliberate exception: it shifts text *into* the
+    /// margin rather than blanking it, so the row still runs to the edge. A
+    /// shell editing a long wrapped command line inserts and then reprints the
+    /// remainder, and clearing the flag under it would split one logical line
+    /// in two for triple-click, copy and E4's reflow.
+    fn endLine(self: *Terminal) void {
+        self.cursorMeta().flags.wrapped = false;
+    }
+
     fn reverseIndex(self: *Terminal) void {
         if (self.cursor.y == self.scroll_top) {
-            self.screen().scrollDown(self.scroll_top, self.scroll_bot, 1, self.blankCell());
+            self.scrollScreenDown(self.scroll_top, self.scroll_bot, 1);
         } else if (self.cursor.y > 0) {
             self.cursor.y -= 1;
         }
@@ -485,22 +643,30 @@ pub const Terminal = struct {
     // -- erase --------------------------------------------------------------
 
     fn eraseDisplay(self: *Terminal, mode: u16) void {
-        const s = self.screen();
         const blank = self.blankCell();
         switch (mode) {
             0 => { // cursor to end
-                @memset(s.row(self.cursor.y)[self.cursor.x..], blank);
-                if (self.cursor.y + 1 < self.rows) s.clearRows(self.cursor.y + 1, self.rows - 1, blank);
+                // The tail of this row is gone, so it no longer runs into the
+                // row below; the rows below are new lines outright.
+                self.endLine();
+                @memset(self.screen().row(self.cursor.y)[self.cursor.x..], blank);
+                if (self.cursor.y + 1 < self.rows) self.clearScreenRows(self.cursor.y + 1, self.rows - 1);
             },
             1 => { // start to cursor
-                if (self.cursor.y > 0) s.clearRows(0, self.cursor.y - 1, blank);
-                @memset(s.row(self.cursor.y)[0 .. self.cursor.x + 1], blank);
+                // The *tail* survives, so this row's wrap into the next is
+                // still true and the flag stays. Same reasoning as EL 1.
+                if (self.cursor.y > 0) self.clearScreenRows(0, self.cursor.y - 1);
+                @memset(self.screen().row(self.cursor.y)[0 .. self.cursor.x + 1], blank);
             },
-            2 => s.fill(blank),
+            2 => self.fillScreen(self.screen(), blank),
             3 => { // xterm: also clear scrollback
-                s.fill(blank);
+                self.fillScreen(self.screen(), blank);
                 self.scrollback.clear();
                 self.view_offset = 0;
+                // Every line the selection could have been anchored to is
+                // gone, including the history half of one that spanned the
+                // boundary.
+                self.selection = null;
             },
             else => {},
         }
@@ -510,9 +676,19 @@ pub const Terminal = struct {
         const r = self.screen().row(self.cursor.y);
         const blank = self.blankCell();
         switch (mode) {
-            0 => @memset(r[self.cursor.x..], blank),
+            // 0 and 2 blank the row's tail, so whatever ran off the right
+            // margin is not there any more and the row no longer joins the
+            // one below it. 1 erases only up to the cursor and leaves the
+            // tail -- and the wrap -- intact.
+            0 => {
+                self.endLine();
+                @memset(r[self.cursor.x..], blank);
+            },
             1 => @memset(r[0 .. self.cursor.x + 1], blank),
-            2 => @memset(r, blank),
+            2 => {
+                self.endLine();
+                @memset(r, blank);
+            },
             else => {},
         }
     }
@@ -520,17 +696,20 @@ pub const Terminal = struct {
     fn eraseChars(self: *Terminal, n: u16) void {
         const r = self.screen().row(self.cursor.y);
         const end = @min(self.cursor.x + n, self.cols);
+        // Only when it reaches the margin: an ECH in the middle of a row
+        // leaves the character that wrapped exactly where it was.
+        if (end >= self.cols) self.endLine();
         @memset(r[self.cursor.x..end], self.blankCell());
     }
 
     fn insertLines(self: *Terminal, n: u16) void {
         if (self.cursor.y < self.scroll_top or self.cursor.y > self.scroll_bot) return;
-        self.screen().scrollDown(self.cursor.y, self.scroll_bot, n, self.blankCell());
+        self.scrollScreenDown(self.cursor.y, self.scroll_bot, n);
     }
 
     fn deleteLines(self: *Terminal, n: u16) void {
         if (self.cursor.y < self.scroll_top or self.cursor.y > self.scroll_bot) return;
-        self.screen().scrollUp(self.cursor.y, self.scroll_bot, n, self.blankCell());
+        self.scrollScreenUp(self.cursor.y, self.scroll_bot, n);
     }
 
     fn setScrollRegion(self: *Terminal, csi: vt.Csi) void {
@@ -645,7 +824,10 @@ pub const Terminal = struct {
             },
             7 => self.modes.wrap = on,
             25 => self.modes.cursor_visible = on,
-            1000, 1002, 1003, 1006, 1015 => self.modes.mouse = on,
+            // Tracking modes and encodings are different questions. 1006
+            // and 1015 only say how an event is spelled on the wire.
+            1000, 1002, 1003 => self.modes.mouse = on,
+            1006, 1015 => self.modes.mouse_sgr = on,
             47, 1047, 1049 => self.setAltScreen(on, p == 1049),
             2004 => self.modes.bracketed_paste = on,
             else => {},
@@ -654,9 +836,14 @@ pub const Terminal = struct {
 
     fn setAltScreen(self: *Terminal, on: bool, save_cursor: bool) void {
         if (on == self.on_alt) return;
+        // The alt screen is a different set of lines, and the primary
+        // underneath is about to be hidden or revealed wholesale. Keeping the
+        // selection across the switch would leave a highlight over text that
+        // is no longer the text it was taken from.
+        self.selection = null;
         if (on) {
             if (save_cursor) self.saved_cursor = self.cursor;
-            self.alt.fill(.blank);
+            self.fillScreen(&self.alt, .blank);
             self.on_alt = true;
             self.cursor.x = 0;
             self.cursor.y = 0;
@@ -698,9 +885,13 @@ pub const Terminal = struct {
     }
 
     pub fn fullReset(self: *Terminal) void {
-        self.primary.fill(.blank);
-        self.alt.fill(.blank);
+        // `next_line_id` is deliberately *not* reset. Ids have to stay
+        // globally disjoint for the life of the terminal, or a stale anchor
+        // taken before the reset resolves onto a live row after it.
+        self.fillScreen(&self.primary, .blank);
+        self.fillScreen(&self.alt, .blank);
         self.scrollback.clear();
+        self.selection = null;
         self.cursor = .{};
         self.saved_cursor = .{};
         self.modes = .{};
@@ -747,6 +938,49 @@ pub const Terminal = struct {
             return self.screen().row(0);
         }
         return self.screen().row(y - self.view_offset);
+    }
+
+    /// The metadata of the row `viewRow(y)` returns. Same branch, same
+    /// fallback: the two must never disagree about which line row `y` is, or
+    /// the highlight lands on a different row than the text it copies.
+    pub fn viewRowMeta(self: *Terminal, y: usize) grid.RowMeta {
+        if (self.view_offset == 0 or self.on_alt) return self.screen().rowMeta(y).*;
+        if (y < self.view_offset) {
+            const back_index = self.view_offset - y - 1;
+            if (self.scrollback.backMeta(back_index)) |m| return m;
+            return self.screen().rowMeta(0).*;
+        }
+        return self.screen().rowMeta(y - self.view_offset).*;
+    }
+
+    // -- selection ----------------------------------------------------------
+    //
+    // The model is in `src/sel.zig`, which imports nothing but `std`, `grid`
+    // and this file, so all of it is unit-tested. What lives here is the one
+    // field and the two calls that move it.
+
+    /// Replace the selection, normalized against the grid as it is now.
+    ///
+    /// Normalizing at set time rather than in the extractor is what keeps the
+    /// highlight and the copied text describing the same cells: wide-character
+    /// snapping and word/line expansion happen once, here, and everything
+    /// downstream reads the same endpoints.
+    ///
+    /// A selection whose endpoints no longer resolve -- both evicted from
+    /// scrollback, or taken on a screen that is no longer showing -- becomes
+    /// null rather than a range pointing at nothing.
+    pub fn setSelection(self: *Terminal, s: ?sel.Selection) void {
+        const next = if (s) |v| sel.normalize(self, v) else null;
+        const changed = (next == null) != (self.selection == null) or
+            (next != null and !std.meta.eql(next.?, self.selection.?));
+        self.selection = next;
+        if (changed) self.dirty = true;
+    }
+
+    pub fn clearSelection(self: *Terminal) void {
+        if (self.selection == null) return;
+        self.selection = null;
+        self.dirty = true;
     }
 };
 
@@ -972,12 +1206,20 @@ fn expectSameTerminal(a: *Terminal, b: *Terminal) !void {
     try testing.expectEqual(a.cursor, b.cursor);
     try testing.expectEqual(a.pending_wrap, b.pending_wrap);
     try testing.expectEqual(a.scrollback.len, b.scrollback.len);
+    // Row metadata, not just cells. Both terminals started from a fresh
+    // `Terminal.init`, so their id counters ran in lockstep and the ids
+    // themselves are comparable -- which makes this differential test cover
+    // `printRun`'s wrap site for free, both the flag it sets and the ids the
+    // scrolls underneath it mint.
+    try testing.expectEqual(a.next_line_id, b.next_line_id);
     for (0..a.rows) |y| {
         try testing.expectEqualSlices(Cell, a.screen().row(y), b.screen().row(y));
+        try testing.expectEqual(a.screen().rowMeta(y).*, b.screen().rowMeta(y).*);
     }
     var i: usize = 0;
     while (a.scrollback.back(i)) |line_a| : (i += 1) {
         try testing.expectEqualSlices(Cell, line_a, b.scrollback.back(i).?);
+        try testing.expectEqual(a.scrollback.backMeta(i).?, b.scrollback.backMeta(i).?);
     }
 }
 
@@ -1077,4 +1319,185 @@ test "reverse index scrolls down at the top of the region" {
     var buf: [64]u8 = undefined;
     try testing.expectEqualStrings("", line(&t, 0, &buf));
     try testing.expectEqualStrings("aaaa", line(&t, 1, &buf));
+}
+
+// -- the wrapped flag ------------------------------------------------------
+//
+// E1's first shared primitive. Selection joins wrapped rows without a
+// separator (E1), reflow re-wraps by it (E4) and path detection spans it
+// (A4), so what sets and clears it is worth its own table rather than being
+// covered incidentally by a selection test.
+
+fn wrapped(t: *Terminal, y: usize) bool {
+    return t.screen().rowMeta(y).flags.wrapped;
+}
+
+test "wrapping at the right margin marks the row that was left, not the one arrived at" {
+    var t = try mkTerm(4, 3);
+    defer t.deinit();
+    feed(&t, "abcdef");
+    // Row 0 ran off the margin into row 1. Row 1 has not, yet.
+    try testing.expect(wrapped(&t, 0));
+    try testing.expect(!wrapped(&t, 1));
+}
+
+test "a wide character that will not fit in the last column wraps the row too" {
+    var t = try mkTerm(4, 3);
+    defer t.deinit();
+    // Three narrow characters then a wide one: it cannot start in column 3,
+    // so it wraps -- through the second of `print`'s two wrap sites.
+    feed(&t, "abc\u{4e00}");
+    try testing.expect(wrapped(&t, 0));
+    try testing.expectEqual(grid.Wide.wide, t.screen().at(0, 1).wide);
+}
+
+test "a printable run wraps rows the same way one character at a time does" {
+    // `printRun` has its own wrap site, and it is the one nearly every byte
+    // of real output goes through. The differential test above compares the
+    // two paths' metadata, so this only has to state the expected answer.
+    var t = try mkTerm(4, 3);
+    defer t.deinit();
+    feed(&t, "abcdefghij");
+    try testing.expect(wrapped(&t, 0));
+    try testing.expect(wrapped(&t, 1));
+    try testing.expect(!wrapped(&t, 2));
+}
+
+test "a line feed ends a line, and a carriage return does not" {
+    const Case = struct { name: []const u8, bytes: []const u8, want: bool };
+    const cases = [_]Case{
+        // A wrapped row, then something that either ends the line or does not.
+        .{ .name = "LF", .bytes = "\n", .want = false },
+        .{ .name = "VT", .bytes = "\x0b", .want = false },
+        .{ .name = "FF", .bytes = "\x0c", .want = false },
+        .{ .name = "IND", .bytes = "\x1bD", .want = false },
+        .{ .name = "NEL", .bytes = "\x1bE", .want = false },
+        .{ .name = "EL 0", .bytes = "\x1b[K", .want = false },
+        .{ .name = "EL 2", .bytes = "\x1b[2K", .want = false },
+        .{ .name = "ED 0", .bytes = "\x1b[J", .want = false },
+        .{ .name = "ED 2", .bytes = "\x1b[2J", .want = false },
+        // A carriage return moves within the line; it does not end it, so
+        // `printf 'a\rb'` on a wrapped row still joins to the row below.
+        .{ .name = "CR", .bytes = "\r", .want = true },
+        // EL 1 and ED 1 erase up to the cursor and leave the tail -- and the
+        // wrap the tail ran into -- intact.
+        .{ .name = "EL 1", .bytes = "\x1b[1K", .want = true },
+        .{ .name = "ED 1", .bytes = "\x1b[1J", .want = true },
+        // Cursor movement says nothing about where the line ends.
+        .{ .name = "CUP", .bytes = "\x1b[1;2H", .want = true },
+        .{ .name = "backspace", .bytes = "\x08", .want = true },
+        // The cursor sits at column 2 of 4. `wrapped` is a claim about the
+        // cell at the *right margin*, so an ECH that reaches it ends the line
+        // and one that stops short does not. Before this, `ECH` left a row it
+        // had blanked entirely still claiming to wrap, and a triple-click on
+        // the row below pasted the blanks in front of it.
+        .{ .name = "ECH to the margin", .bytes = "\x1b[2X", .want = false },
+        .{ .name = "ECH short of it", .bytes = "\x1b[1X", .want = true },
+        // DCH always reaches it: shifting left blanks the tail.
+        .{ .name = "DCH", .bytes = "\x1b[P", .want = false },
+        // ICH is the deliberate exception -- it shifts text *into* the margin
+        // rather than blanking it, and a shell editing a long wrapped command
+        // line does exactly that before reprinting the remainder.
+        .{ .name = "ICH", .bytes = "\x1b[@", .want = true },
+    };
+
+    for (cases) |case| {
+        var t = try mkTerm(4, 3);
+        defer t.deinit();
+        feed(&t, "abcdef"); // row 0 wraps into row 1
+        feed(&t, "\x1b[1;3H"); // back onto row 0, mid-row
+        try testing.expect(wrapped(&t, 0));
+        feed(&t, case.bytes);
+        testing.expectEqual(case.want, wrapped(&t, 0)) catch |err| {
+            std.debug.print("wrapped after {s}: expected {}\n", .{ case.name, case.want });
+            return err;
+        };
+    }
+}
+
+test "a row scrolled into history carries its wrap flag and its id with it" {
+    var t = try mkTerm(4, 2);
+    defer t.deinit();
+    const id0 = t.screen().rowMeta(0).id;
+    feed(&t, "abcdefgh"); // two wrapped rows filling the screen
+    try testing.expect(wrapped(&t, 0));
+    feed(&t, "\r\nxy"); // push row 0 into scrollback
+
+    try testing.expectEqual(@as(usize, 1), t.scrollback.len);
+    try testing.expectEqual(id0, t.scrollback.backMeta(0).?.id);
+    try testing.expect(t.scrollback.backMeta(0).?.flags.wrapped);
+}
+
+// -- line identity ---------------------------------------------------------
+
+test "every live line has a distinct id, through every way of scrolling" {
+    // The trap this is watching is `scrollUp`'s `n >= height` branch, which
+    // clears the whole region and so stamps `height` rows rather than `n`.
+    // Two rows sharing an id is invisible until a selection resolves onto
+    // the wrong one, so assert it directly.
+    var t = try mkTerm(8, 6);
+    defer t.deinit();
+
+    const churn = [_][]const u8{
+        "line\r\n", // plain line feed
+        "\x1b[2;5r", // a scroll region
+        "\x1b[3;1H\x1b[2L", // IL inside it
+        "\x1b[4;1H\x1b[3M", // DL inside it
+        "\x1b[S", // SU
+        "\x1b[9T", // SD by more than the region height
+        "\x1b[r\x1b[99S", // whole screen, n >= height
+        "\x1bM", // RI
+        "\x1b[2J", // ED 2
+        "wrapping text that runs off the right margin several times over",
+    };
+    for (churn) |bytes| feed(&t, bytes);
+
+    var seen: [64]u64 = undefined;
+    var n: usize = 0;
+    for (0..t.rows) |y| {
+        seen[n] = t.screen().rowMeta(y).id;
+        n += 1;
+    }
+    for (0..t.scrollback.len) |i| {
+        seen[n] = t.scrollback.backMeta(i).?.id;
+        n += 1;
+    }
+    for (seen[0..n], 0..) |a, i| {
+        try testing.expect(a != 0); // 0 means "no line" and is never minted
+        for (seen[i + 1 .. n]) |b| try testing.expect(a != b);
+    }
+}
+
+test "the primary and the alt screen never share an id" {
+    // One counter for both, so an anchor taken on the primary cannot resolve
+    // onto an alt row that happens to carry the same number.
+    var t = try mkTerm(6, 4);
+    defer t.deinit();
+    feed(&t, "\x1b[?1049h");
+    for (0..30) |_| feed(&t, "alt\r\n");
+    feed(&t, "\x1b[?1049l");
+    for (0..30) |_| feed(&t, "pri\r\n");
+
+    for (0..t.rows) |y| {
+        const pid = t.primary.rowMeta(y).id;
+        for (0..t.rows) |z| try testing.expect(pid != t.alt.rowMeta(z).id);
+    }
+}
+
+test "a reset does not reuse an id" {
+    var t = try mkTerm(6, 3);
+    defer t.deinit();
+    feed(&t, "before\r\n");
+    const before = t.primary.rowMeta(0).id;
+    t.fullReset();
+    for (0..t.rows) |y| try testing.expect(t.primary.rowMeta(y).id > before);
+}
+
+test "rows that survive a height change keep their identity" {
+    var t = try mkTerm(10, 4);
+    defer t.deinit();
+    feed(&t, "keep me\r\n");
+    const id = t.screen().rowMeta(0).id;
+    try t.resize(10, 8);
+    try testing.expectEqual(id, t.screen().rowMeta(0).id);
 }

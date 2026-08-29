@@ -146,7 +146,7 @@ fn timeParse(alloc: std.mem.Allocator, corpus: []const u8, passes: usize, cols: 
 
 /// Walk every cell of a screen the way a full repaint does.
 fn timeScan(alloc: std.mem.Allocator, cols: usize, rows: usize, passes: usize) !struct { ns: u64, sink: u64 } {
-    var screen = try grid.Screen.init(alloc, cols, rows);
+    var screen = try grid.Screen.init(alloc, cols, rows, 1);
     defer screen.deinit(alloc);
 
     // Fill with something varied: an all-blank screen is not what a repaint

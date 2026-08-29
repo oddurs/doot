@@ -33,14 +33,20 @@ ended at and prints its grid checksum.
 | | |
 |---|---|
 | `Cmd` `+` / `-` / `0` | font size |
+| `Cmd C` | copy the selection |
 | `Cmd V` | paste (bracketed when the app asks for it) |
 | `Cmd K` | clear |
 | `Cmd ⇧ R` | start or stop recording keystrokes, now |
 | wheel | scroll history, or arrow keys on the alternate screen |
+| drag | select; double-click a word, triple-click a whole logical line |
+| `⇧` click | extend the selection |
+| `⌥` drag | select a rectangle |
 
 Flags: `--font-size N` (6–72), `--size COLSxROWS` (up to 1000 each),
 `--shell PATH`, `--version`, `--frame-stats` (frame timing to stderr, once a
-second), `--screenshot PATH` (save the frame drawn one second in, as a PNG).
+second), `--screenshot PATH` (save the frame drawn one second in, as a PNG),
+`--copy-on-select`, `--select R,C,R,C` (select these viewport cells before the
+screenshot, so a highlight can be photographed).
 
 ## Recording
 
@@ -101,6 +107,7 @@ with no window server at all.
 | `png.zig` | A small PNG encoder and decoder, so screenshots need no image library. |
 | `rec.zig` | The `.trec` session log: the format, the writer, the reader, the sessions directory and the retention sweep. |
 | `replay.zig` | `.trec` in, `Terminal` out — the screen rebuilt from the log. `zig build replay`. |
+| `sel.zig` | The selection model: line ids, word boundaries, wide-char snapping, what a copy produces. No SDL, so all of it is tested. |
 | `check.zig` | `checksum(term)`: a hash over everything a replay has to reproduce. The arbiter. |
 | `record.zig` | Records a command's terminal output, keystrokes and all, as a corpus. |
 | `redact.zig` | Secret shapes, redacted as a recording is written and checked in CI. |
@@ -114,9 +121,9 @@ terminal uses no CPU.
 
 ## Not done yet
 
-- **Selection and copy.** You can paste but not select. The biggest gap.
 - **Reflow on resize.** Content is preserved top-left anchored; lines don't
-  re-wrap when the window widens.
+  re-wrap when the window widens, and the scrollback is discarded when the
+  width changes.
 - **Combining marks** are dropped rather than composed onto a base character.
 - **Sixel and DCS** payloads are parsed and discarded.
 - **Mouse reporting** modes are tracked but events aren't forwarded.
@@ -135,7 +142,7 @@ like here — the short version is that escape-sequence changes should cite the
 spec, and a test that fails without your fix is worth more than a paragraph
 explaining it.
 
-The "Not done yet" list above is the feature roadmap — selection and copy is
+The "Not done yet" list above is the feature roadmap — reflow on resize is
 the biggest gap. For performance work, [docs/roadmap/](docs/roadmap/) tracks
 the sprints, what shipped, and what measurement retired, with `zig build bench`
 as the arbiter.

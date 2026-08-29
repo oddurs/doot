@@ -9,6 +9,25 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Selection and copy.** Drag to select, double-click for a word,
+  triple-click for a whole logical line across however many rows it wrapped
+  onto, `Shift`-click to extend, `Option`-drag for a rectangle. `Cmd C`
+  copies; `--copy-on-select` copies as soon as a drag ends. Wide characters
+  select as a pair, trailing blanks are trimmed, a wrapped line comes back as
+  one line with no newline the shell never sent, and the text is the cells'
+  codepoints and nothing else.
+- **A selection is anchored to lines, not to rows**, so one made while output
+  is scrolling stays on the same text as it scrolls away and into the
+  scrollback. An end-to-end test selects a marker, pushes a hundred more lines
+  through a real shell, and asserts the copied bytes are identical.
+- **Two primitives three other sprints were waiting on**: a per-row `wrapped`
+  flag, set when a line feed came from the right margin rather than from `LF`,
+  and a stable per-line id that survives the screen ring rotating and the
+  scrollback pushing. Reflow will re-wrap by the first; search and semantic
+  prompts will point at the second.
+- `--select R,C,R,C` applies a selection in viewport coordinates before
+  `--screenshot` fires, so the gallery can photograph a highlight.
+
 - **Every session is recorded to disk, and it is on by default.** One
   append-only `.trec` file per session under `~/Library/Application Support/
   terminator/sessions/`, holding every byte the session printed with the time
@@ -30,6 +49,17 @@ All notable changes to this project are documented here. The format follows
   leaves the machine, and `rm` is the whole of deleting a session.
 - `--frame-stats` gained a `record:` line: bytes, records, redactions, flushes
   and the worst single flush.
+
+### Fixed
+
+- **`ESC[?1006h` no longer disables selection.** 1006 and 1015 are mouse
+  *encodings*, not tracking modes, and folding them into one `mouse` bool with
+  1000/1002/1003 meant an application that asked only for SGR encoding — many
+  do, before or without ever asking for tracking — silently took the mouse
+  away from the user.
+- A selected cell with reverse video is drawn with its **unreversed**
+  foreground, so a `less` status line no longer disappears the moment it is
+  selected.
 
 ### Changed
 

@@ -15,8 +15,8 @@ says what "done" means for each item.
 
 | | Today | Where |
 |---|---|---|
-| Selection | None. Paste only | `main.zig` handles `Cmd V`; nothing handles the mouse |
-| Mouse reporting | Mode tracked as one bool, no encoding distinction, events not forwarded | `Modes.mouse`; `setMode` folds 1000/1002/1003/1006/1015 into it |
+| ~~Selection~~ | **Done ([E1](completed/sprint-e1-selection.md)).** Drag, word, logical line, shift-extend, block; `Cmd C` and copy-on-select | `sel.zig`, `Frame.sel`, `main.zig`'s mouse handlers |
+| Mouse reporting | Tracking modes and the encoding are separate now, but events are still not forwarded | `Modes.mouse` / `Modes.mouse_sgr`; `sel.mouseOwner`'s `.child` branch is empty |
 | Search | None | — |
 | Reflow | Top-left anchored. **Scrollback is discarded whenever the width changes** | `Terminal.resize`: `if (c != self.cols)` re-creates the ring |
 | Config | CLI flags only: `--font-size`, `--shell`, `--size`, `--frame-stats` | `parseArgs` |
@@ -24,11 +24,31 @@ says what "done" means for each item.
 | Application keypad | Tracked, **never consulted by the encoder** | `Modes.app_keypad`; no reader outside `terminal.zig` |
 | Scroll position | **Any output snaps the view to the bottom**, so a log cannot be read while it grows | `markDirty` resets `view_offset` |
 | Scroll indicator | None. No way to see how far back the view is | — |
-| Wrapped-line tracking | None. A wrapped line and two lines are the same thing to the grid | `print` calls `lineFeed` on wrap and records nothing |
+| ~~Wrapped-line tracking~~ | **Done ([E1](completed/sprint-e1-selection.md)).** Per row, in the checksum, and carried into scrollback | `grid.RowMeta.Flags.wrapped` |
+| ~~Line identity~~ | **Done ([E1](completed/sprint-e1-selection.md)).** One counter for both screens and the history, stored per row | `grid.RowMeta.id`, `Terminal.next_line_id` |
 
 ## The sprints
 
-### E1 — Selection and copy (two weeks)
+### E1 — Selection and copy (two weeks) — **done**
+
+Shipped: [the sprint record](completed/sprint-e1-selection.md). Both
+primitives landed with it, and the `wrapped` flag is in the grid checksum
+while the line id and the selection deliberately are not — one is a property
+of the byte stream, the others are properties of history and of the view.
+
+Two things came out differently from the plan below, and both are worth
+knowing before E3 or E4 starts:
+
+- **The `Frame` carries a resolved per-row span, not the selection range.**
+  `draw` runs after the terminal mutex is released and has no scrollback, so
+  it cannot resolve a line id at all. `snapshot` resolves once and fills
+  `Frame.sel: []Span` in the row loop it already had.
+- **`Modes.mouse` was one bool over 1000/1002/1003/1006/1015**, so an
+  application sending `ESC[?1006h` alone disabled selection. Tracking and
+  encoding are separate fields now, which is most of what E2 needed from
+  this file.
+
+The plan as written:
 
 The biggest gap. Click-drag, double-click for a word, triple-click for a
 line, `Shift`-click to extend, `Option`-drag for a block. `Cmd C` copies;
@@ -69,9 +89,11 @@ with benchmarks watching them — `scroll` must read flat afterwards.
 
 Forward what the modes ask for: X10 (1000), button-event (1002),
 any-event (1003), with SGR encoding (1006) and the legacy form as the
-fallback. `Modes.mouse` becomes an enum of the tracking mode plus a flag
-for the encoding. `Shift` overrides reporting so a selection can still be
-made in an app that owns the mouse. The pointer is an I-beam over the
+fallback. **[E1](completed/sprint-e1-selection.md) already split the tracking
+modes from the encoding** (`Modes.mouse` and `Modes.mouse_sgr`) and left
+`sel.mouseOwner`'s `.child` branch empty for this sprint to fill; E1 refuses
+to start a selection when it returns `.child`, so forwarding a drag will not
+also paint a highlight. `Shift` already overrides. The pointer is an I-beam over the
 grid and an arrow over chrome.
 
 *Why here:* small, unblocks [A4](agentic.md), and every TUI an agent runs
@@ -85,6 +107,12 @@ sending arrows when no mouse mode is set.
 *Risk:* low.
 
 ### E3 — Search (one to two weeks)
+
+*Reuses from E1:* `sel.lineById` for the scrollback boundary, `RowMeta.id` to
+point at a match, and the highlight path. Note that `Frame.sel` is one span
+per row on purpose — search wants a list, and generalising it was
+deliberately left to this sprint rather than guessed at in E1.
+
 
 `Cmd F` opens a one-line bar drawn in the grid area; typing searches the
 scrollback and screen incrementally, case-folded; `⏎` and `⇧⏎` step
@@ -192,7 +220,8 @@ view offset is unchanged; the indicator is in the gallery.
 ## Why this order
 
 - **E1 first** because it is most missed and because the `wrapped` flag
-  and line identity unblock E3, E4 and two agentic sprints.
+  and line identity unblock E3, E4 and two agentic sprints. Done; both
+  primitives are in `grid.RowMeta`.
 - **E2 is a week** and unblocks [A4](agentic.md).
 - **K0 ([config.md](config.md)) before E6, X3 and X4**, so none of them
   invent a config format.

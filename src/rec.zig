@@ -152,10 +152,15 @@ pub const flag_redacted: u8 = 1;
 ///
 /// This list is closed, and knowing that it is closed is what makes the
 /// checksum test meaningful. The complete set of ways `main.zig` mutates the
-/// terminal outside `parser.feed` is `resize`, `fullReset` and `scrollView`;
-/// `resize` has a record type of its own, `scrollView` moves only the
-/// viewport and the checksum excludes the viewport by construction, and
-/// `fullReset` is this.
+/// terminal outside `parser.feed` is `resize`, `fullReset`, `scrollView` and
+/// `setSelection`; `resize` has a record type of its own, and `fullReset` is
+/// this.
+///
+/// `scrollView` and `setSelection` are both excluded, and for the same
+/// reason: they move only what the window is showing and what the user has
+/// picked out of it, and `check.zig` excludes both by construction. A record
+/// for either would put events in the file that no replay could act on and
+/// no checksum could see -- which is how a closed list stops being one.
 pub const Control = enum(u8) { full_reset = 0, _ };
 
 pub const EndReason = enum(u8) {
