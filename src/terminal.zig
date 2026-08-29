@@ -221,6 +221,10 @@ pub const Terminal = struct {
         self.markDirty();
     }
 
+    pub fn printRun(self: *Terminal, bytes: []const u8) void {
+        for (bytes) |b| self.print(b);
+    }
+
     pub fn execute(self: *Terminal, b: u8) void {
         switch (b) {
             0x07 => self.bell = true,

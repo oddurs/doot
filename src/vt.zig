@@ -54,7 +54,17 @@ pub const Parser = struct {
     utf8_need: u3 = 0,
 
     pub fn feed(self: *Parser, handler: anytype, bytes: []const u8) void {
-        for (bytes) |b| self.advance(handler, b);
+        var i: usize = 0;
+        while (i < bytes.len) {
+            if (self.state == .ground and self.utf8_need == 0 and bytes[i] >= 0x20 and bytes[i] <= 0x7e) {
+                const start = i;
+                while (i < bytes.len and bytes[i] >= 0x20 and bytes[i] <= 0x7e) : (i += 1) {}
+                handler.printRun(bytes[start..i]);
+            } else {
+                self.advance(handler, bytes[i]);
+                i += 1;
+            }
+        }
     }
 
     pub fn advance(self: *Parser, handler: anytype, b: u8) void {
@@ -291,6 +301,10 @@ const Recorder = struct {
         const n = std.unicode.utf8Encode(cp, &buf) catch return;
         self.out.appendSlice(self.alloc, buf[0..n]) catch {};
     }
+
+    fn printRun(self: *Recorder, bytes: []const u8) void {
+        for (bytes) |b| self.print(b);
+    }
     fn execute(self: *Recorder, b: u8) void {
         self.emit("<x{x:0>2}>", .{b});
     }
@@ -324,6 +338,22 @@ test "plain ascii passes through" {
     const got = try run(testing.allocator, "hello");
     defer testing.allocator.free(got);
     try testing.expectEqualStrings("hello", got);
+}
+
+test "printable runs split across feeds match one contiguous run" {
+    var split = Recorder{ .alloc = testing.allocator };
+    defer split.out.deinit(testing.allocator);
+    var contiguous = Recorder{ .alloc = testing.allocator };
+    defer contiguous.out.deinit(testing.allocator);
+
+    var split_parser = Parser{};
+    split_parser.feed(&split, "hello ");
+    split_parser.feed(&split, "world");
+
+    var contiguous_parser = Parser{};
+    contiguous_parser.feed(&contiguous, "hello world");
+
+    try testing.expectEqualStrings(contiguous.out.items, split.out.items);
 }
 
 test "utf-8 is decoded across byte boundaries" {
