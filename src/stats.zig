@@ -15,10 +15,11 @@
 //!             that decides bulk-output throughput.
 //!   build     from the lock being released to the frame being submitted --
 //!             vertex generation and draw calls.
-//!   present   the wait for vblank inside SDL_RenderPresent.
+//!   drawable  the wait for the GPU to finish plus the wait for a drawable.
 //!
-//! Before Sprint 1 of docs/roadmap/performance.md, `present` happened inside
-//! `lock`, and the lock column was the whole frame.
+//! Before Sprint 1 of docs/roadmap/performance.md, that wait happened inside
+//! `lock`, and the lock column was the whole frame. It was called `present`
+//! until D0, when the wait stopped being SDL's and became ours.
 
 const std = @import("std");
 
@@ -55,9 +56,11 @@ const Interval = struct {
 pub const FrameTimes = struct {
     lock: u64 = 0,
     build: u64 = 0,
-    present: u64 = 0,
-    /// SDL submission calls the frame made -- rects, textures, geometry.
-    /// Not a time, but it is the number Sprint 2 exists to change.
+    /// The wait for the GPU to finish the frame, plus the wait for a
+    /// drawable to present it to.
+    drawable: u64 = 0,
+    /// GPU submission calls the frame made. Not a time, but it is the number
+    /// Sprint 2 existed to change.
     calls: u64 = 0,
 };
 
@@ -71,7 +74,7 @@ pub const FrameStats = struct {
     frames: u64 = 0,
     lock: Interval = .{},
     build: Interval = .{},
-    present: Interval = .{},
+    drawable: Interval = .{},
     calls: Interval = .{},
 
     total_frames: u64 = 0,
@@ -88,7 +91,7 @@ pub const FrameStats = struct {
         self.frames += 1;
         self.lock.add(t.lock);
         self.build.add(t.build);
-        self.present.add(t.present);
+        self.drawable.add(t.drawable);
         self.calls.add(t.calls);
         self.total_lock_max = @max(self.total_lock_max, t.lock);
     }
@@ -114,15 +117,15 @@ pub const FrameStats = struct {
             return;
         }
         std.debug.print(
-            "frame-stats  {d:>4} fps  lock {d:>7.0}/{d:<7.0}  build {d:>6.0}/{d:<6.0}  present {d:>7.0}/{d:<7.0} us  calls {d:>5}/{d:<5}  pty {d:>7.2} MiB/s\n",
+            "frame-stats  {d:>4} fps  lock {d:>7.0}/{d:<7.0}  build {d:>6.0}/{d:<6.0}  drawable {d:>7.0}/{d:<7.0} us  calls {d:>5}/{d:<5}  pty {d:>7.2} MiB/s\n",
             .{
                 n * 1_000_000_000 / elapsed,
                 self.lock.avgUs(n),
                 self.lock.maxUs(),
                 self.build.avgUs(n),
                 self.build.maxUs(),
-                self.present.avgUs(n),
-                self.present.maxUs(),
+                self.drawable.avgUs(n),
+                self.drawable.maxUs(),
                 self.calls.sum / n,
                 self.calls.max,
                 mibPerSec(bytes_read - self.window_bytes_start, elapsed),
@@ -133,7 +136,7 @@ pub const FrameStats = struct {
         self.frames = 0;
         self.lock = .{};
         self.build = .{};
-        self.present = .{};
+        self.drawable = .{};
         self.calls = .{};
         self.window_start = now;
         self.window_bytes_start = bytes_read;
@@ -178,7 +181,7 @@ test "intervals report average and worst case" {
 
 test "a disabled timer records nothing" {
     var s = FrameStats.init(false);
-    s.record(.{ .lock = 1, .build = 1, .present = 1 });
+    s.record(.{ .lock = 1, .build = 1, .drawable = 1 });
     try testing.expectEqual(@as(u64, 0), s.frames);
 }
 
@@ -198,8 +201,8 @@ test "a window that elapses with no frames starts a new one instead of dividing 
 
 test "a window with frames in it reports and resets" {
     var s = FrameStats.init(true);
-    s.record(.{ .lock = 1_000, .build = 2_000, .present = 3_000, .calls = 2 });
-    s.record(.{ .lock = 3_000, .build = 4_000, .present = 5_000, .calls = 4 });
+    s.record(.{ .lock = 1_000, .build = 2_000, .drawable = 3_000, .calls = 2 });
+    s.record(.{ .lock = 3_000, .build = 4_000, .drawable = 5_000, .calls = 4 });
     try testing.expectEqual(@as(u64, 2), s.frames);
     try testing.expectEqual(@as(u64, 6), s.calls.sum);
 

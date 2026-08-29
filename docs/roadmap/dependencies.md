@@ -27,7 +27,7 @@ it. Nine of twelve modules already import nothing but `std`.
 
 | Borrowed | What it provides here | Surface | Replaced by |
 |---|---|---|---|
-| **SDL3** | Window and Retina scale; the event pump; keyboard, text input, IME, dead keys; wheel; clipboard; vsync present; a 2D renderer driven with one `SDL_RenderGeometryRaw` and one texture; a mutex | ~60 symbols in `render.zig` and `main.zig`, five concerns | D0 (renderer), D4 (everything else) |
+| **SDL3** | Window and Retina scale; the event pump; keyboard, text input, IME, dead keys; wheel; clipboard; a `CAMetalLayer` for the window; a mutex | ~50 symbols; the 11 left in `render.zig` are all window and init calls, none of which draw | ~~D0 (renderer)~~ **done**; D4 (everything else) |
 | **FreeType** | Font file parsing, `cmap` lookup, outline rasterization, synthetic bold and oblique. About 5% of the library | 16 symbols in `font.zig` | D1, D2 |
 | **libc** | `forkpty`, `ioctl`, `poll`, `execvp` | 12 symbols in `pty.zig` | Never. It is the kernel's interface |
 
@@ -48,7 +48,9 @@ And one about the code: the renderer already speaks in a single vertex
 buffer and a single atlas texture
 ([sprint 2](completed/sprint-2-one-draw-call.md)), and `main.zig` is the
 only file that knows what an SDL event is. The seams the swap needs are
-the seams the code already has.
+the seams the code already has. [D0](completed/sprint-d0-gpu-path.md) has
+since taken the drawing, and it took the seams as it found them: the vertex
+buffer went to Metal unchanged.
 
 ## The shape of the platform layer
 
@@ -74,7 +76,7 @@ if no, it is logic and lives in Zig.
 
 ## The sprints
 
-### D0 — Own the GPU path (one to two weeks)
+### D0 — Own the GPU path (one to two weeks) — **the first half is done**
 
 Replace SDL's 2D renderer with Metal, behind SDL's window. SDL3 hands us
 a `CAMetalLayer` for any window (`SDL_Metal_CreateView`,
@@ -109,6 +111,14 @@ and `present` are within noise of the SDL numbers at 100×30 and 200×60;
 
 *Risk:* low to medium. The only unknown is how much of Metal's object
 soup ends up in `gpu.m`; the 400-line rule is the check.
+
+*Result, first commit:* SDL's 2D renderer is gone; `render.zig` issues no
+SDL drawing call. Windowed output is pixel-identical to the SDL build across
+all eleven gallery scenes — **0 differing pixels**, not a tolerance. `gpu.m`
+came to 396 lines, nine under the 400-line rule, which is close enough that
+the rule earned its keep. `build` and `drawable` are within noise of
+the SDL numbers at both geometries and `calls` reads 1. The sRGB flip is
+still to come. See [the record](completed/sprint-d0-gpu-path.md).
 
 *Gate check, measured before starting:* the risk was mis-stated, and the
 plan above needs one change.

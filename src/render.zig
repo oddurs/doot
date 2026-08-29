@@ -2,22 +2,32 @@
 //!
 //! Two passes: background runs, then glyphs. Every quad -- backgrounds, glyph
 //! bitmaps, underlines, the cursor -- goes into one vertex buffer with its
-//! colour on the vertices, sampling one atlas texture, and the whole frame is
-//! submitted with a single `SDL_RenderGeometryRaw`. Solid fills sample a
-//! white texel reserved in the atlas, which is what keeps them in the same
-//! call as the glyphs.
+//! colour and a draw mode on the vertices, sampling one atlas texture, and
+//! the whole frame is submitted to Metal as a single indexed draw. A solid
+//! fill carries mode `solid` and reads no texture at all; a glyph carries
+//! mode `mask` and takes its coverage from the atlas's alpha.
+//!
+//! The GPU is ours as of D0: `src/gpu.zig` over `src/platform/gpu.m`. SDL
+//! still supplies the window, the event pump and the input, which D4 takes.
+//! Nothing in this file issues an SDL *drawing* call.
+//!
+//! Every frame is rendered into an offscreen texture, and the window -- when
+//! there is one -- is a consumer of the result rather than the render target.
+//! That is what lets the gallery run with no window server at all.
 //!
 //! A frame is drawn in two steps that run under different locking rules.
 //! `snapshot` copies the visible cells out of the terminal and must be called
 //! with the terminal mutex held; `draw` renders that copy and presents it, and
-//! must be called with the mutex released. The wait for vblank lives inside
-//! present, and while it sat inside the lock the reader thread could not feed
-//! a byte for the whole of every frame -- bulk output was throttled to a few
-//! KiB per refresh. The copy costs microseconds; the wait costs milliseconds.
+//! must be called with the mutex released. The wait for the GPU and for a
+//! drawable lives inside present, and while it sat inside the lock the reader
+//! thread could not feed a byte for the whole of every frame -- bulk output
+//! was throttled to a few KiB per refresh. The copy costs microseconds; the
+//! wait costs milliseconds.
 
 const std = @import("std");
 const grid = @import("grid.zig");
 const font = @import("font.zig");
+const gpu = @import("gpu.zig");
 const theme = @import("theme.zig");
 const stats = @import("stats.zig");
 const png = @import("png.zig");
@@ -30,8 +40,6 @@ pub const c = @cImport({
 pub const Error = error{
     SdlInit,
     WindowFailed,
-    RendererFailed,
-    TextureFailed,
 };
 
 /// Padding between the window edge and the first cell, in logical pixels.
@@ -55,25 +63,26 @@ pub const Frame = struct {
     }
 };
 
-/// One corner of a quad, laid out so a single array feeds all three of
-/// `SDL_RenderGeometryRaw`'s attribute pointers at one stride.
-const Vertex = extern struct {
-    x: f32,
-    y: f32,
-    color: c.SDL_FColor,
-    u: f32,
-    v: f32,
-};
+/// A colour on the vertices: straight alpha, 0..1 per channel. The shader
+/// premultiplies.
+const Color = struct { r: f32, g: f32, b: f32, a: f32 };
 
 /// Texture coordinate of the centre of the atlas's reserved white texel.
-/// Solid fills sample it, which is what lets backgrounds, underlines and the
-/// cursor share the glyph draw call instead of breaking it up.
+///
+/// Solid fills used to sample it, which is what let them share the glyph
+/// draw call under SDL. The `solid` vertex mode reads no texture now, so
+/// this is only the coordinate those quads carry -- pointing it somewhere
+/// meaningful rather than at (0, 0) keeps the fallback honest for whoever
+/// adds the next mode. The texel itself still lives in `font.zig`.
 const white_uv: f32 = 0.5 / @as(f32, font.atlas_size);
 
 pub const Renderer = struct {
     window: *c.SDL_Window,
-    sdl: *c.SDL_Renderer,
-    atlas_tex: *c.SDL_Texture,
+    /// SDL's `CAMetalLayer`-bearing view, or null when there is no window
+    /// server. Null is the *only* signal that we are headless: the layer is
+    /// then null too, and `gpu_present` returns without doing anything.
+    metal_view: c.SDL_MetalView,
+    gpu: gpu.Context,
     font: font.Font,
     atlas: font.Atlas,
     theme: theme.Theme,
@@ -86,8 +95,8 @@ pub const Renderer = struct {
     capture_w: u32 = 0,
     capture_h: u32 = 0,
     /// The frame's geometry, rebuilt every draw and submitted in one call.
-    verts: std.ArrayList(Vertex) = .empty,
-    indices: std.ArrayList(i32) = .empty,
+    verts: std.ArrayList(gpu.Vertex) = .empty,
+    indices: std.ArrayList(u32) = .empty,
     /// Submission calls made by the frame being built, for `--frame-stats`.
     calls: u64 = 0,
     /// `--screenshot`: save the first frame drawn after this instant, then
@@ -129,12 +138,26 @@ pub const Renderer = struct {
         ) orelse return Error.WindowFailed;
         errdefer c.SDL_DestroyWindow(window);
 
-        const sdl = c.SDL_CreateRenderer(window, null) orelse return Error.RendererFailed;
-        errdefer c.SDL_DestroyRenderer(sdl);
-
-        // VSync keeps us from burning the GPU redrawing faster than the
-        // display can show, which matters a lot for battery life.
-        _ = c.SDL_SetRenderVSync(sdl, 1);
+        // A view whose backing layer is a `CAMetalLayer`, which is all we
+        // want from SDL here. It fails under the dummy video driver -- there
+        // is no window server to make a layer in -- and that failure is the
+        // headless path, not an error: `gpu.m` renders offscreen either way.
+        const metal_view = c.SDL_Metal_CreateView(window);
+        errdefer if (metal_view != null) c.SDL_Metal_DestroyView(metal_view);
+        const layer: ?*anyopaque = if (metal_view != null)
+            c.SDL_Metal_GetLayer(metal_view)
+        else blk: {
+            // Expected headless, and the gallery depends on it. But on a
+            // machine that does have a window server this means a window
+            // nothing will ever be presented to, and a blank window with
+            // no explanation is the worst way to learn that -- so say so
+            // once, on stderr, rather than leave it silent.
+            std.debug.print(
+                "terminator: no Metal layer ({s}); rendering offscreen, nothing will be shown\n",
+                .{c.SDL_GetError()},
+            );
+            break :blk null;
+        };
 
         // The display's density, and the density we draw at. They differ
         // only when --scale asks for one the display does not have, which
@@ -150,21 +173,6 @@ pub const Renderer = struct {
         var atlas = try font.Atlas.init(alloc);
         errdefer atlas.deinit();
 
-        const tex = c.SDL_CreateTexture(
-            sdl,
-            c.SDL_PIXELFORMAT_RGBA32,
-            c.SDL_TEXTUREACCESS_STATIC,
-            font.atlas_size,
-            font.atlas_size,
-        ) orelse return Error.TextureFailed;
-        _ = c.SDL_SetTextureBlendMode(tex, c.SDL_BLENDMODE_BLEND);
-        // Glyphs are tiny; nearest sampling keeps their edges crisp since we
-        // always draw them at 1:1 scale anyway.
-        _ = c.SDL_SetTextureScaleMode(tex, c.SDL_SCALEMODE_NEAREST);
-        // The atlas starts empty except for its white texel, and the texture
-        // has to carry that from the first frame.
-        _ = c.SDL_UpdateTexture(tex, null, atlas.pixels.ptr, font.atlas_size * 4);
-
         // Size the window so its *pixel* size fits the grid at this scale.
         // Without this a forced scale would render 2x glyphs into a 1x
         // window and show half the columns.
@@ -177,10 +185,38 @@ pub const Renderer = struct {
             @intFromFloat(@round(@as(f32, @floatFromInt(want_h)) / density)),
         );
 
+        var px_w: c_int = 0;
+        var px_h: c_int = 0;
+        _ = c.SDL_GetWindowSizeInPixels(window, &px_w, &px_h);
+
+        // The one place a Metal failure is reported by name. A machine with
+        // no GPU -- CI's macos-14 runner is one -- has to say so rather than
+        // trap somewhere inside the first frame.
+        var gpu_err: [256]u8 = undefined;
+        var ctx = gpu.Context.create(
+            layer,
+            @intCast(px_w),
+            @intCast(px_h),
+            font.atlas_size,
+            &gpu_err,
+        ) catch |err| {
+            std.debug.print(
+                "terminator: could not start the GPU renderer: {s}\n",
+                .{gpu.message(&gpu_err)},
+            );
+            return err;
+        };
+        errdefer ctx.destroy();
+
+        // The atlas starts empty except for its white texel, and the texture
+        // has to carry that from the first frame. Uploading the whole thing
+        // also gives the rest of it defined contents.
+        try ctx.uploadAtlas(0, 0, font.atlas_size, font.atlas_size, atlas.pixels.ptr, font.atlas_size * 4);
+
         var self = Renderer{
             .window = window,
-            .sdl = sdl,
-            .atlas_tex = tex,
+            .metal_view = metal_view,
+            .gpu = ctx,
             .font = f,
             .atlas = atlas,
             .theme = theme.default,
@@ -199,20 +235,28 @@ pub const Renderer = struct {
         self.verts.deinit(self.atlas.alloc);
         self.indices.deinit(self.atlas.alloc);
         self.atlas.alloc.free(self.frame.cells);
-        c.SDL_DestroyTexture(self.atlas_tex);
+        self.gpu.destroy();
         self.atlas.deinit();
         self.font.deinit();
-        c.SDL_DestroyRenderer(self.sdl);
+        if (self.metal_view != null) c.SDL_Metal_DestroyView(self.metal_view);
         c.SDL_DestroyWindow(self.window);
         c.SDL_Quit();
     }
 
+    /// Re-measure the window and point the render target at the new size.
+    ///
+    /// `SDL_GetWindowSizeInPixels` rather than the `SDL_GetRenderOutputSize`
+    /// this used to call: both were measured to agree exactly, headless and
+    /// windowed, at 1x and 2x, and only the first survives D4.
     pub fn updateSize(self: *Renderer) void {
         var w: c_int = 0;
         var h: c_int = 0;
-        _ = c.SDL_GetRenderOutputSize(self.sdl, &w, &h);
+        _ = c.SDL_GetWindowSizeInPixels(self.window, &w, &h);
         self.px_w = @intCast(w);
         self.px_h = @intCast(h);
+        // A failed resize leaves the old target in place: the next frame is
+        // drawn at the stale size rather than not drawn at all.
+        self.gpu.resize(@intCast(w), @intCast(h)) catch {};
     }
 
     /// How many cells fit in the current window.
@@ -241,15 +285,18 @@ pub const Renderer = struct {
 
         // Re-upload the (empty) atlas so stale glyphs can't bleed through the
         // gaps between newly packed ones, and so the white texel survives.
-        _ = c.SDL_UpdateTexture(self.atlas_tex, null, self.atlas.pixels.ptr, font.atlas_size * 4);
+        try self.gpu.uploadAtlas(
+            0,
+            0,
+            font.atlas_size,
+            font.atlas_size,
+            self.atlas.pixels.ptr,
+            font.atlas_size * 4,
+        );
     }
 
     pub fn setTitle(self: *Renderer, title: [:0]const u8) void {
         _ = c.SDL_SetWindowTitle(self.window, title.ptr);
-    }
-
-    fn setDrawColor(self: *Renderer, color: grid.Rgb) void {
-        _ = c.SDL_SetRenderDrawColor(self.sdl, color.r, color.g, color.b, 255);
     }
 
     /// The effective colors for a cell, after reverse video, dim and bold.
@@ -314,9 +361,7 @@ pub const Renderer = struct {
     /// calls would have.
     pub fn draw(self: *Renderer) stats.FrameTimes {
         const t0 = stats.nowNs();
-        self.calls = 1;
-        self.setDrawColor(self.theme.bg);
-        _ = c.SDL_RenderClear(self.sdl);
+        self.calls = 0;
         self.verts.clearRetainingCapacity();
         self.indices.clearRetainingCapacity();
 
@@ -371,25 +416,19 @@ pub const Renderer = struct {
         self.cursorQuads(ox, oy, cw, ch);
 
         // -- submit --------------------------------------------------------
-        if (self.verts.items.len > 0) {
-            const v = self.verts.items;
-            const stride = @sizeOf(Vertex);
-            _ = c.SDL_RenderGeometryRaw(
-                self.sdl,
-                self.atlas_tex,
-                &v[0].x,
-                stride,
-                &v[0].color,
-                stride,
-                &v[0].u,
-                stride,
-                @intCast(v.len),
-                self.indices.items.ptr,
-                @intCast(self.indices.items.len),
-                @sizeOf(i32),
-            );
+        // One call: the clear is the render pass's load action rather than a
+        // draw of its own, which is why this reads 1 where SDL's path read 2.
+        const bg = fcolor(self.theme.bg);
+        if (self.gpu.draw(
+            .{ bg.r, bg.g, bg.b },
+            self.verts.items,
+            self.indices.items,
+        )) {
+            // Counted, not asserted. `--frame-stats` documents this column
+            // as the way to notice a frame that fragmented into more than
+            // one submission; hard-coding it to 1 would make that untrue.
             self.calls += 1;
-        }
+        } else |_| {}
 
         const t1 = stats.nowNs();
         if (self.screenshot_path) |path| {
@@ -398,12 +437,14 @@ pub const Renderer = struct {
                 self.saveScreenshot(path);
             }
         }
-        _ = c.SDL_RenderPresent(self.sdl);
-        return .{ .build = t1 - t0, .present = stats.nowNs() - t1, .calls = self.calls };
+        // Headless, this returns immediately: there is no layer to present
+        // to, and the frame already exists in the offscreen texture.
+        self.gpu.present() catch {};
+        return .{ .build = t1 - t0, .drawable = stats.nowNs() - t1, .calls = self.calls };
     }
 
-    /// Append one textured quad: two triangles over `x0..x1` by `y0..y1`,
-    /// sampling atlas `ua..ub` by `va..vb`, in one flat colour.
+    /// Append one quad: two triangles over `x0..x1` by `y0..y1`, sampling
+    /// atlas `ua..ub` by `va..vb`, in one flat colour, drawn with `mode`.
     fn quad(
         self: *Renderer,
         x0: f32,
@@ -414,17 +455,33 @@ pub const Renderer = struct {
         va: f32,
         ub: f32,
         vb: f32,
-        color: c.SDL_FColor,
+        color: Color,
+        mode: gpu.Mode,
     ) void {
         const alloc = self.atlas.alloc;
-        const base: i32 = @intCast(self.verts.items.len);
+        const base: u32 = @intCast(self.verts.items.len);
+        const v = struct {
+            fn make(x: f32, y: f32, u: f32, vv: f32, col: Color, m: gpu.Mode) gpu.Vertex {
+                return .{
+                    .x = x,
+                    .y = y,
+                    .r = col.r,
+                    .g = col.g,
+                    .b = col.b,
+                    .a = col.a,
+                    .u = u,
+                    .v = vv,
+                    .mode = m,
+                };
+            }
+        }.make;
         // An out-of-memory frame is drawn without this quad rather than not
         // at all; the next frame gets another go.
         self.verts.appendSlice(alloc, &.{
-            .{ .x = x0, .y = y0, .color = color, .u = ua, .v = va },
-            .{ .x = x1, .y = y0, .color = color, .u = ub, .v = va },
-            .{ .x = x1, .y = y1, .color = color, .u = ub, .v = vb },
-            .{ .x = x0, .y = y1, .color = color, .u = ua, .v = vb },
+            v(x0, y0, ua, va, color, mode),
+            v(x1, y0, ub, va, color, mode),
+            v(x1, y1, ub, vb, color, mode),
+            v(x0, y1, ua, vb, color, mode),
         }) catch return;
         self.indices.appendSlice(alloc, &.{
             base, base + 1, base + 2,
@@ -434,9 +491,12 @@ pub const Renderer = struct {
         };
     }
 
-    /// A solid rectangle: a quad over the atlas's white texel.
+    /// A solid rectangle. It carries the white texel's coordinate, but the
+    /// `solid` mode reads no texture at all -- multiplying by an exactly-1.0
+    /// texel was a no-op, so this is the same output with one fewer
+    /// dependent read.
     fn rect(self: *Renderer, x: f32, y: f32, w: f32, h: f32, color: grid.Rgb) void {
-        self.quad(x, y, x + w, y + h, white_uv, white_uv, white_uv, white_uv, fcolor(color));
+        self.quad(x, y, x + w, y + h, white_uv, white_uv, white_uv, white_uv, fcolor(color), .solid);
     }
 
     /// The glyph for `cell` at cell origin (`px`, `py`), plus its underline
@@ -471,6 +531,9 @@ pub const Renderer = struct {
                     ub,
                     vb,
                     fcolor(fg),
+                    // The atlas carries coverage in alpha; the colour is on
+                    // the vertices.
+                    .mask,
                 );
             }
         }
@@ -487,36 +550,32 @@ pub const Renderer = struct {
 
     /// Read the frame back and write it as a PNG.
     ///
-    /// Read back before present rather than captured from the screen, so
-    /// this needs no screen-recording permission and returns exactly what
-    /// the renderer produced -- which is what makes it an acceptance test
-    /// rather than a photograph.
+    /// Read out of the offscreen target rather than captured from the
+    /// screen, so this needs no screen-recording permission, returns exactly
+    /// what the renderer produced, and works with no window at all -- which
+    /// is what makes it an acceptance test rather than a photograph.
     fn saveScreenshot(self: *Renderer, path: [:0]const u8) void {
-        const raw = c.SDL_RenderReadPixels(self.sdl, null) orelse return;
-        defer c.SDL_DestroySurface(raw);
-        // The renderer's own format varies by backend; normalise so the
-        // encoder only ever sees one layout.
-        const surface = c.SDL_ConvertSurface(raw, c.SDL_PIXELFORMAT_RGBA32) orelse return;
-        defer c.SDL_DestroySurface(surface);
-
         // Crop to the size the grid asked for. Setting the window size is
         // done in logical units, so on a 2x display an odd pixel height
         // rounds up by one and the same capture differs by a row between
         // machines. Cropping makes a reference reproducible anywhere.
-        const full_w: u32 = @intCast(surface.*.w);
-        const full_h: u32 = @intCast(surface.*.h);
+        const full_w: u32 = @intCast(@max(self.px_w, 0));
+        const full_h: u32 = @intCast(@max(self.px_h, 0));
         const w = if (self.capture_w > 0) @min(self.capture_w, full_w) else full_w;
         const h = if (self.capture_h > 0) @min(self.capture_h, full_h) else full_h;
-        const pitch: usize = @intCast(surface.*.pitch);
-        const src: [*]const u8 = @ptrCast(surface.*.pixels orelse return);
+        if (w == 0 or h == 0) return;
 
         const alloc = self.atlas.alloc;
         const pixels = alloc.alloc(u8, w * h * 4) catch return;
         defer alloc.free(pixels);
-        // Rows are padded to the pitch, so copy row by row rather than
-        // treating the surface as one block.
-        for (0..h) |y| {
-            @memcpy(pixels[y * w * 4 ..][0 .. w * 4], src[y * pitch ..][0 .. w * 4]);
+        self.gpu.readPixels(0, 0, w, h, pixels, w * 4) catch return;
+
+        // The render target is BGRA, because that is the format a drawable
+        // wants. Turning that into the encoder's RGBA is this side's job:
+        // the platform layer does not know what a PNG is.
+        var i: usize = 0;
+        while (i < pixels.len) : (i += 4) {
+            std.mem.swap(u8, &pixels[i], &pixels[i + 2]);
         }
 
         const bytes = png.encode(alloc, .{ .w = w, .h = h, .pixels = pixels }) catch return;
@@ -527,20 +586,19 @@ pub const Renderer = struct {
         _ = std.c.fwrite(bytes.ptr, 1, bytes.len, file);
     }
 
+    /// A region the packer produced is always inside the atlas, so a
+    /// failure here is a bug rather than a condition -- but dropping the
+    /// glyph is better than dropping the frame, and the next frame retries.
     fn uploadAtlasRegion(self: *Renderer, r: font.Rect) void {
-        const sdl_rect = c.SDL_Rect{
-            .x = @intCast(r.x),
-            .y = @intCast(r.y),
-            .w = @intCast(r.w),
-            .h = @intCast(r.h),
-        };
         const offset = (@as(usize, r.y) * font.atlas_size + r.x) * 4;
-        _ = c.SDL_UpdateTexture(
-            self.atlas_tex,
-            &sdl_rect,
+        self.gpu.uploadAtlas(
+            r.x,
+            r.y,
+            r.w,
+            r.h,
             self.atlas.pixels.ptr + offset,
             font.atlas_size * 4,
-        );
+        ) catch {};
     }
 
     fn cursorQuads(self: *Renderer, ox: f32, oy: f32, cw: f32, ch: f32) void {
@@ -575,7 +633,7 @@ pub const Renderer = struct {
     }
 };
 
-fn fcolor(rgb: grid.Rgb) c.SDL_FColor {
+fn fcolor(rgb: grid.Rgb) Color {
     return .{
         .r = @as(f32, @floatFromInt(rgb.r)) / 255.0,
         .g = @as(f32, @floatFromInt(rgb.g)) / 255.0,

@@ -22,11 +22,24 @@ pub fn build(b: *std.Build) void {
     });
     mod.addOptions("build_options", options);
 
-    // Borrowed plumbing: SDL3 gives us a window, input and a Metal-backed
-    // 2D renderer; FreeType rasterizes glyphs. Everything above these two
-    // lines -- the VT parser, the grid, the atlas -- is ours.
+    // Borrowed plumbing: SDL3 gives us a window and input; FreeType
+    // rasterizes glyphs. Everything above these two lines -- the VT parser,
+    // the grid, the atlas, and since D0 the renderer -- is ours.
     mod.linkSystemLibrary("sdl3", .{});
     mod.linkSystemLibrary("freetype2", .{});
+
+    // The platform layer: Objective-C compiled by our own toolchain, behind
+    // a C ABI, linking nothing but the system's own frameworks. Only the app
+    // module needs it -- neither test root constructs a Renderer, and the
+    // bench, audit, gallery, record and check-corpora steps never link it.
+    mod.addIncludePath(b.path("src/platform"));
+    mod.addCSourceFile(.{
+        .file = b.path("src/platform/gpu.m"),
+        .flags = &.{ "-fobjc-arc", "-Wall", "-Wextra" },
+    });
+    mod.linkFramework("Metal", .{});
+    mod.linkFramework("QuartzCore", .{});
+    mod.linkFramework("Foundation", .{});
 
     const exe = b.addExecutable(.{
         .name = "terminator",

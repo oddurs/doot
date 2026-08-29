@@ -6,9 +6,9 @@
 
 A terminal emulator for macOS, written in Zig.
 
-The VT parser, the cell grid, the scrollback, and the glyph atlas are written
-here from scratch. SDL3 supplies the window, input, and a Metal-backed 2D
-renderer; FreeType rasterizes glyphs. Nothing else is borrowed.
+The VT parser, the cell grid, the scrollback, the glyph atlas and the Metal
+renderer are written here from scratch. SDL3 supplies the window and input;
+FreeType rasterizes glyphs. Nothing else is borrowed.
 
 ## Build
 
@@ -37,15 +37,22 @@ arbiters that decide whether a change is an improvement.
 
 Flags: `--font-size N` (6–72), `--size COLSxROWS` (up to 1000 each),
 `--shell PATH`, `--version`, `--frame-stats` (frame timing to stderr, once a
-second), `--screenshot PATH` (save the frame drawn one second in, as a BMP).
+second), `--screenshot PATH` (save the frame drawn one second in, as a PNG).
 
 ## How it fits together
 
 ```
-PTY ──► vt.Parser ──► Terminal ──► Renderer ──► SDL3 ──► Metal
-        state          grid +       glyph
-        machine        scrollback   atlas
+PTY ──► vt.Parser ──► Terminal ──► Renderer ──► gpu.m ──► Metal
+        state          grid +       glyph       one       offscreen
+        machine        scrollback   atlas       draw      texture
+                                                call          │
+                                        SDL3 window ◄─────────┘
+                                        (an optional consumer)
 ```
+
+Every frame is rendered into an offscreen texture and then blitted to the
+window's drawable, if there is a window. That is why the gallery can render
+with no window server at all.
 
 | file | what it does |
 |---|---|
@@ -55,10 +62,12 @@ PTY ──► vt.Parser ──► Terminal ──► Renderer ──► SDL3 ─
 | `pty.zig` | `forkpty`, window-size signalling, non-blocking reads. |
 | `font.zig` | FreeType faces and the shelf-packed glyph atlas. |
 | `render.zig` | Snapshot under the lock, then one vertex buffer and one draw call for the frame. |
+| `gpu.zig` | The Zig side of the Metal ABI: vertex layout, error mapping, the embedded shader. |
+| `platform/` | Objective-C glue behind a C ABI — `gpu.m` and `shader.metal`. No terminal state, ever. |
 | `input.zig` | Keys to bytes. Application cursor mode, xterm modifier params, the lot. |
 | `theme.zig` | 16 ANSI colors plus the generated xterm cube and grayscale ramp. |
 | `main.zig` | Reader thread, event loop, the mutex between them. |
-| `stats.zig` | The `--frame-stats` timer: lock hold, build and present per frame. |
+| `stats.zig` | The `--frame-stats` timer: lock hold, build and drawable wait per frame. |
 | `cli.zig` | Command-line options, and the bounds on anything the renderer will size a window from. |
 | `png.zig` | A small PNG encoder and decoder, so screenshots need no image library. |
 | `record.zig` | Records a command's terminal output, keystrokes and all, as a corpus. |
