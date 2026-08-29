@@ -138,6 +138,38 @@ there is not. `gpu_read_pixels` becomes the primary path rather than an
 afterthought for `--screenshot`, and the renderer becomes testable with
 no window server at all — which is more than the SDL path can claim.
 
+*CI probe, run before writing any of it:* after D0 there is no software
+fallback, so whether a GitHub runner has a GPU decides whether the gallery
+survives the sprint. Measured on both runners in the matrix, with a
+throwaway job compiling an Objective-C probe through `zig cc`:
+
+| | macos-15 | macos-14 |
+|---|---|---|
+| Metal device | `Apple Paravirtual device` | **none** |
+| unified memory | yes | — |
+| runtime shader compile | ok | — |
+| offscreen render + readback | correct | — |
+
+Three conclusions.
+
+**The gallery is safe**, because its job runs on `macos-15`. Runtime shader
+compilation works there too, so `newLibraryWithSource:` is viable and D0
+needs no Metal toolchain at build time — which matters, since `xcrun metal`
+is not in the Command Line Tools.
+
+**`macos-14` must never run the renderer.** It has no GPU. Today it only
+compiles and runs the test suite, neither of which constructs a `Renderer`,
+so nothing changes — but `gpu_create` failing by name rather than crashing
+is what keeps that a clear message instead of a mystery.
+
+**The non-unified-memory readback path should not be written.** Every
+machine this ships to or tests on reports unified memory, including the
+paravirtual device. A `MTLStorageModeManaged` branch with a
+`synchronizeTexture:` would be code that cannot be exercised anywhere,
+and untested code that looks correct is worse than an explicit boundary:
+require unified memory and say so if it is ever absent. Revisit only if
+[D5](#d5--one-binary) adds an x86_64 row, which would make it testable.
+
 The sprint's second unknown is separate: its *done when* asks that
 "`render.zig` contains no `SDL_` symbol", which cannot hold inside D0's
 own scope. `render.zig` owns `SDL_Init`, `SDL_CreateWindow`,
