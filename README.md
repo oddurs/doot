@@ -37,7 +37,7 @@ arbiters that decide whether a change is an improvement.
 
 Flags: `--font-size N` (6–72), `--size COLSxROWS` (up to 1000 each),
 `--shell PATH`, `--version`, `--frame-stats` (frame timing to stderr, once a
-second), `--screenshot PATH` (save the frame drawn one second in, as a BMP).
+second), `--screenshot PATH` (save the frame drawn one second in, as a PNG).
 
 ## How it fits together
 

@@ -9,7 +9,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
-- **The renderer is ours.** SDL's 2D renderer is replaced by about 300 lines
+- **The renderer is ours.** SDL's 2D renderer is replaced by 396 lines
   of Objective-C over Metal (`src/platform/gpu.m`, `src/platform/shader.metal`)
   behind a hand-written C ABI, with SDL still supplying the window and input.
   `render.zig` issues no SDL drawing call. Windowed output is **pixel-identical**

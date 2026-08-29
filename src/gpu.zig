@@ -62,6 +62,7 @@ pub const Error = error{
     GpuCreateFailed,
     GpuResizeFailed,
     GpuDrawFailed,
+    GpuUploadFailed,
     GpuReadFailed,
     GpuPresentFailed,
 };
@@ -114,8 +115,12 @@ pub const Context = struct {
         h: u32,
         pixels: [*]const u8,
         bytes_per_row: u32,
-    ) void {
-        c.gpu_upload_atlas(self.handle, x, y, w, h, pixels, bytes_per_row);
+    ) Error!void {
+        // An out-of-range region is the caller's bug, and there is nothing
+        // useful to do about it here -- but it must not pass silently.
+        if (c.gpu_upload_atlas(self.handle, x, y, w, h, pixels, bytes_per_row) != 0) {
+            return Error.GpuUploadFailed;
+        }
     }
 
     /// Clear to `clear` and draw the frame. One command buffer, one pass,

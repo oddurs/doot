@@ -28,7 +28,11 @@ and `getBytes` readback all work with no window server. So the design became
 *render offscreen always, present to a layer only if there is one*, with
 `gpu_read_pixels` as the primary path rather than a `--screenshot` afterthought.
 
-**CI's `macos-14` runner has no Metal device at all.** That makes
+**CI's `macos-14` runner has no Metal device at all** -- measured directly
+by a probe job on that runner, which reported `device=NONE` while the same
+probe on `macos-15` reported `Apple Paravirtual device` with unified memory.
+The two runners differ; a green gallery job proves only what `macos-15` can
+do, because that is where the gallery runs. That makes
 `gpu_create` failing by name, rather than trapping, load-bearing rather than
 tidy.
 
@@ -206,7 +210,9 @@ to "no SDL *drawing* call", since D0 runs behind SDL's window by construction.
   drains the GPU before it returns. Pipelining needs a fence and a
   triple-buffered vertex ring first.
 - **Do not add a `MTLStorageModeManaged` branch.** Every machine this ships to
-  or is tested on reports unified memory, CI's paravirtual device included, so
+  or is tested on *and that has a Metal device at all* reports unified
+  memory -- CI's `macos-15` paravirtual device included, while `macos-14`
+  has no device and never constructs a `Renderer`. So
   it would be code no test could reach. `gpu_create` fails by name instead.
   Revisit only if [D5](../dependencies.md#d5--one-binary) adds an x86_64 row.
 - **Do not declare the MSL vertex struct with vector types.** Scalars only.
@@ -215,3 +221,17 @@ to "no SDL *drawing* call", since D0 runs behind SDL's window by construction.
   Never ask SDL which video driver is running.
 - `gpu_read_pixels` returns **BGRA**. The swizzle lives in `render.zig`, where
   something already knows what a PNG is.
+
+## What it costs at startup
+
+`newLibraryWithSource:` compiles the shader on every launch: **27.5 ms** on
+the first call in a process, 0.3 ms once the in-process cache is warm. SDL
+shipped a precompiled `metallib` and paid none of it, so this is real
+latency the swap added, and it is not on the frame path where
+`--frame-stats` would have caught it.
+
+It is the price of not making full Xcode a build dependency -- `xcrun metal`
+is not in the Command Line Tools. If it ever matters, caching the compiled
+library under `~/Library/Caches` is a self-contained change behind the same
+ABI. Recorded here so the next person finds a number rather than rediscovers
+the cost.

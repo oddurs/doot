@@ -16,16 +16,23 @@
 //  testable with no window server, which is more than the SDL path could
 //  claim.
 //
-//  **Exactly one frame is in flight, deliberately, and it ends inside
-//  `gpu_present`.** Present waits for the GPU before it returns, so control
-//  never goes back to the caller with work outstanding. That is what makes
-//  the `replaceRegion:` in `gpu_upload_atlas` -- which the caller issues
-//  while building the *next* frame's vertices -- safe with no fence, and it
-//  is the same blocking shape `SDL_RenderPresent` had. `gpu_draw` and
-//  `gpu_read_pixels` wait too, so the invariant holds even for a caller
-//  that never presents. Pipelining this would need an atlas fence and a
-//  triple-buffered vertex ring; do not "optimise" it into existence by
-//  accident.
+//  **Exactly one frame is in flight, deliberately.** `gpu_draw` commits and
+//  returns without waiting, so work *is* outstanding when it hands control
+//  back; every entry point that touches a resource the GPU may still be
+//  reading -- `gpu_upload_atlas`, `gpu_draw`, `gpu_resize`,
+//  `gpu_read_pixels`, `gpu_present` -- waits first. That is what makes the
+//  fence-free `replaceRegion:` in `gpu_upload_atlas` safe, and it is safe
+//  whatever order a caller calls things in, which the next caller (D2's
+//  colour bitmaps, uploaded mid-frame) depends on.
+//
+//  An earlier version of this comment claimed nothing was ever in flight
+//  when the caller had control. That was false -- it was true only because
+//  `render.zig` happens to present immediately after drawing -- and a
+//  caller who believed it would have raced the atlas. The waits are in the
+//  callees now, so the guarantee does not depend on what the caller does.
+//
+//  Pipelining this would need an atlas fence and a triple-buffered vertex
+//  ring; do not "optimise" it into existence by accident.
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -130,7 +137,9 @@ GpuContext *gpu_create(void *layer, uint32_t width, uint32_t height, uint32_t at
         }
         // Deliberately a hard boundary rather than a MTLStorageModeManaged
         // fallback: every machine this ships to or is tested on reports
-        // unified memory, including CI's paravirtual device, so the other
+        // unified memory, including the paravirtual device on CI's macos-15
+        // runner (macos-15 has one; macos-14 has no Metal device at all, and
+        // never constructs a Renderer). So the other
         // branch would be code no test could ever reach.
         if (!s.device.hasUnifiedMemory) {
             set_err(err, err_len, "this Metal device has no unified memory, which the renderer requires");
@@ -252,16 +261,25 @@ int gpu_resize(GpuContext *ctx, uint32_t width, uint32_t height) {
     }
 }
 
-void gpu_upload_atlas(GpuContext *ctx, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
-                      const void *pixels, uint32_t bytes_per_row) {
-    if (ctx == NULL || pixels == NULL || w == 0 || h == 0) return;
+int gpu_upload_atlas(GpuContext *ctx, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                     const void *pixels, uint32_t bytes_per_row) {
+    if (ctx == NULL || pixels == NULL || w == 0 || h == 0) return -1;
     GpuState *s = state(ctx);
-    // Safe mid-frame with no fence only because one frame is in flight and
-    // the previous one has already been waited on. See the header comment.
+    // Bounds checked here rather than trusted: an out-of-range region makes
+    // the driver log an assertion and carry on, which is a failure the
+    // caller never hears about. Written as subtraction so it cannot wrap.
+    const uint32_t size = (uint32_t)s.atlas.width;
+    if (x > size || y > size || w > size - x || h > size - y) return -1;
+    // The GPU may still be sampling the atlas for the frame `gpu_draw`
+    // committed. Waiting here is free in the usual ordering, where the
+    // caller has already presented, and is what makes this correct in the
+    // orderings where it has not.
+    wait_for_pending(s);
     [s.atlas replaceRegion:MTLRegionMake2D(x, y, w, h)
                mipmapLevel:0
                  withBytes:pixels
                bytesPerRow:bytes_per_row];
+    return 0;
 }
 
 int gpu_draw(GpuContext *ctx, float clear_r, float clear_g, float clear_b,

@@ -146,8 +146,18 @@ pub const Renderer = struct {
         errdefer if (metal_view != null) c.SDL_Metal_DestroyView(metal_view);
         const layer: ?*anyopaque = if (metal_view != null)
             c.SDL_Metal_GetLayer(metal_view)
-        else
-            null;
+        else blk: {
+            // Expected headless, and the gallery depends on it. But on a
+            // machine that does have a window server this means a window
+            // nothing will ever be presented to, and a blank window with
+            // no explanation is the worst way to learn that -- so say so
+            // once, on stderr, rather than leave it silent.
+            std.debug.print(
+                "terminator: no Metal layer ({s}); rendering offscreen, nothing will be shown\n",
+                .{c.SDL_GetError()},
+            );
+            break :blk null;
+        };
 
         // The display's density, and the density we draw at. They differ
         // only when --scale asks for one the display does not have, which
@@ -201,7 +211,7 @@ pub const Renderer = struct {
         // The atlas starts empty except for its white texel, and the texture
         // has to carry that from the first frame. Uploading the whole thing
         // also gives the rest of it defined contents.
-        ctx.uploadAtlas(0, 0, font.atlas_size, font.atlas_size, atlas.pixels.ptr, font.atlas_size * 4);
+        try ctx.uploadAtlas(0, 0, font.atlas_size, font.atlas_size, atlas.pixels.ptr, font.atlas_size * 4);
 
         var self = Renderer{
             .window = window,
@@ -275,7 +285,7 @@ pub const Renderer = struct {
 
         // Re-upload the (empty) atlas so stale glyphs can't bleed through the
         // gaps between newly packed ones, and so the white texel survives.
-        self.gpu.uploadAtlas(
+        try self.gpu.uploadAtlas(
             0,
             0,
             font.atlas_size,
@@ -351,6 +361,7 @@ pub const Renderer = struct {
     /// calls would have.
     pub fn draw(self: *Renderer) stats.FrameTimes {
         const t0 = stats.nowNs();
+        self.calls = 0;
         self.verts.clearRetainingCapacity();
         self.indices.clearRetainingCapacity();
 
@@ -408,12 +419,16 @@ pub const Renderer = struct {
         // One call: the clear is the render pass's load action rather than a
         // draw of its own, which is why this reads 1 where SDL's path read 2.
         const bg = fcolor(self.theme.bg);
-        self.gpu.draw(
+        if (self.gpu.draw(
             .{ bg.r, bg.g, bg.b },
             self.verts.items,
             self.indices.items,
-        ) catch {};
-        self.calls = 1;
+        )) {
+            // Counted, not asserted. `--frame-stats` documents this column
+            // as the way to notice a frame that fragmented into more than
+            // one submission; hard-coding it to 1 would make that untrue.
+            self.calls += 1;
+        } else |_| {}
 
         const t1 = stats.nowNs();
         if (self.screenshot_path) |path| {
@@ -571,6 +586,9 @@ pub const Renderer = struct {
         _ = std.c.fwrite(bytes.ptr, 1, bytes.len, file);
     }
 
+    /// A region the packer produced is always inside the atlas, so a
+    /// failure here is a bug rather than a condition -- but dropping the
+    /// glyph is better than dropping the frame, and the next frame retries.
     fn uploadAtlasRegion(self: *Renderer, r: font.Rect) void {
         const offset = (@as(usize, r.y) * font.atlas_size + r.x) * 4;
         self.gpu.uploadAtlas(
@@ -580,7 +598,7 @@ pub const Renderer = struct {
             r.h,
             self.atlas.pixels.ptr + offset,
             font.atlas_size * 4,
-        );
+        ) catch {};
     }
 
     fn cursorQuads(self: *Renderer, ox: f32, oy: f32, cw: f32, ch: f32) void {

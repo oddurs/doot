@@ -66,7 +66,7 @@ void gpu_destroy(GpuContext *ctx);
 int gpu_resize(GpuContext *ctx, uint32_t width, uint32_t height);
 
 /* Copy RGBA8 pixels into a rectangle of the atlas texture. */
-void gpu_upload_atlas(GpuContext *ctx, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+int  gpu_upload_atlas(GpuContext *ctx, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
                       const void *pixels, uint32_t bytes_per_row);
 
 /* Clear the offscreen target and draw the whole frame into it: one command
