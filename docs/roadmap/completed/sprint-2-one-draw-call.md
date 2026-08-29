@@ -1,6 +1,6 @@
 # Sprint 2 — One draw call for the glyphs
 
-**Done.** Closed [#8](https://github.com/oddurs/terminator/issues/8).
+**Done.** Closed [#8](https://github.com/oddurs/doot/issues/8).
 
 ## What was proposed
 

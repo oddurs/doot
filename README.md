@@ -1,6 +1,6 @@
-# terminator
+# doot
 
-[![CI](https://github.com/oddurs/terminator/actions/workflows/ci.yml/badge.svg)](https://github.com/oddurs/terminator/actions/workflows/ci.yml)
+[![CI](https://github.com/oddurs/doot/actions/workflows/ci.yml/badge.svg)](https://github.com/oddurs/doot/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Zig 0.16](https://img.shields.io/badge/zig-0.16-f7a41d.svg)](https://ziglang.org/)
 
@@ -17,7 +17,7 @@ Needs Zig 0.16, SDL3 and FreeType:
 ```sh
 brew install zig sdl3 freetype
 zig build -Doptimize=ReleaseFast
-./zig-out/bin/terminator
+./zig-out/bin/doot
 ```
 
 `zig build test` runs the suite: unit tests for the parser, grid, key encoding
@@ -55,7 +55,7 @@ title says `● rec` for as long as it is happening — an on-by-default recorde
 is only defensible if it is visible. **Keystrokes are never recorded unless
 you ask**, because keystrokes contain passwords and the stream a program
 printed usually does not. Files are `0600` inside a `0700` directory under
-`~/Library/Application Support/terminator/sessions/`, one per session, swept
+`~/Library/Application Support/doot/sessions/`, one per session, swept
 after 14 days, and nothing ever leaves the machine. Secrets in the output —
 API keys, tokens, session ids — are replaced on the way in by `redact.zig`.
 

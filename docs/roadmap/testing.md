@@ -60,7 +60,7 @@ T0 is about that.
   wrong ring rotation before Sprint R's reviewer had to build it, and it
   is the test every future data-structure sprint — reflow
   ([E4](essentials.md)), the cluster table ([C2](correctness.md)), the
-  region ring ([#12](https://github.com/oddurs/terminator/issues/12)) —
+  region ring ([#12](https://github.com/oddurs/doot/issues/12)) —
   gets for free.
 - **The golden checksum.** The number `zig build bench` prints becomes
   `test "corpora produce the recorded grid state"`, with the expected

@@ -33,7 +33,7 @@ Mac, with no changes. The core is portable now; only the edges are not.
 | Windows | Named as "a different program" in [platform.md](platform.md). **Revised here:** the core is the same program; the platform layer is different, which is what the platform layer is for | — |
 | Linux | Gated in [P5](platform.md) on the Mac experience being complete. Still true; this page is the plan for when the gate opens | — |
 | Programs | Verified by use: zsh, `vim`, `less`, `htop`, `tmux`. No matrix, no recordings | — |
-| Terminfo | `xterm-256color`; `TERM_PROGRAM=terminator` | `pty.zig` |
+| Terminfo | `xterm-256color`; `TERM_PROGRAM=doot` | `pty.zig` |
 
 ## What "platform" means on each OS
 

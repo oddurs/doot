@@ -167,7 +167,7 @@ pub const Renderer = struct {
             // no explanation is the worst way to learn that -- so say so
             // once, on stderr, rather than leave it silent.
             std.debug.print(
-                "terminator: no Metal layer ({s}); rendering offscreen, nothing will be shown\n",
+                "doot: no Metal layer ({s}); rendering offscreen, nothing will be shown\n",
                 .{c.SDL_GetError()},
             );
             break :blk null;
@@ -215,7 +215,7 @@ pub const Renderer = struct {
             &gpu_err,
         ) catch |err| {
             std.debug.print(
-                "terminator: could not start the GPU renderer: {s}\n",
+                "doot: could not start the GPU renderer: {s}\n",
                 .{gpu.message(&gpu_err)},
             );
             return err;

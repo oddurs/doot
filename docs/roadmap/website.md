@@ -31,7 +31,7 @@ cannot drift.
 | Docs | Fourteen files under `docs/`, readable only on GitHub | `docs/` |
 | Numbers | `bench/baseline.txt`, `--frame-stats` output in sprint records | `bench/`, `docs/roadmap/completed/` |
 | Changelog | `CHANGELOG.md`, Keep-a-Changelog form | — |
-| Name | Shared with a well-known GNOME terminal; a search for the name finds the other one | — |
+| Name | `doot`, since [the rename](completed/sprint-n-rename-doot.md): four letters, no Homebrew or GitHub collision, `doot.sh` free at the time | — |
 | Domain | None | — |
 
 ## The sprints
@@ -161,12 +161,10 @@ same grid the app shows; the rest of the site still has no script tag.
 
 ### W4 — Launch (one week) — **gated**
 
-- **The name.** The site's title disambiguates —
-  *terminator, a terminal for macOS* — and the description says Zig in
-  the first line, because that is what a searcher who found the GNOME
-  one will not see. A domain, if one is wanted, is a custom domain on
-  Pages with HTTPS; until then `oddurs.github.io/terminator` is fine
-  and permanent.
+- **The name** is settled — *doot, a terminal for macOS* — and the
+  description says Zig in the first line. A domain, if one is wanted, is
+  `doot.sh` (free at the time of the rename) as a custom domain on Pages
+  with HTTPS; until then `oddurs.github.io/doot` is fine and permanent.
 - **An Open Graph image** generated from the gallery capture, so the
   link unfurls as the screenshot everywhere it is pasted.
 - **The README links the site** in its first paragraph.

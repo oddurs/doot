@@ -394,7 +394,7 @@ pub fn randomId() [16]u8 {
 
 /// The default sessions directory, written into `buf`.
 ///
-/// `~/Library/Application Support/terminator/sessions` on macOS, and the XDG
+/// `~/Library/Application Support/doot/sessions` on macOS, and the XDG
 /// data directory elsewhere -- the core is kept portable on every PR
 /// (docs/roadmap/compatibility.md's M0) and a hardcoded Apple path is exactly
 /// the kind of thing that quietly stops being true.
@@ -406,17 +406,17 @@ pub fn defaultDir(buf: []u8) ?[]const u8 {
     if (builtin.os.tag.isDarwin()) {
         return std.fmt.bufPrint(
             buf,
-            "{s}/Library/Application Support/terminator/sessions",
+            "{s}/Library/Application Support/doot/sessions",
             .{home},
         ) catch null;
     }
     if (std.c.getenv("XDG_DATA_HOME")) |xdg_z| {
         const xdg = std.mem.span(@as([*:0]const u8, xdg_z));
         if (xdg.len > 0) {
-            return std.fmt.bufPrint(buf, "{s}/terminator/sessions", .{xdg}) catch null;
+            return std.fmt.bufPrint(buf, "{s}/doot/sessions", .{xdg}) catch null;
         }
     }
-    return std.fmt.bufPrint(buf, "{s}/.local/share/terminator/sessions", .{home}) catch null;
+    return std.fmt.bufPrint(buf, "{s}/.local/share/doot/sessions", .{home}) catch null;
 }
 
 /// Create `path` and any missing parent, each `0700`.
@@ -1170,7 +1170,7 @@ const testing = std.testing;
 /// A scratch directory under the system temp dir, removed by the caller.
 fn tempDir(buf: []u8, tag: []const u8) []const u8 {
     const pid = std.c.getpid();
-    return std.fmt.bufPrint(buf, "/tmp/terminator-rec-test-{s}-{d}-{d}", .{
+    return std.fmt.bufPrint(buf, "/tmp/doot-rec-test-{s}-{d}-{d}", .{
         tag, pid, nowNs() % 1_000_000,
     }) catch unreachable;
 }

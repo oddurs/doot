@@ -224,7 +224,7 @@ immediately after.
 in hand. Early enough that A5's tab strip can move into the titlebar
 rather than be built twice.
 
-*Done when:* a screenshot of terminator next to Terminal.app, both with
+*Done when:* a screenshot of doot next to Terminal.app, both with
 the same content, cannot be told apart by their chrome; dragging the
 window between a 1× and a 2× display re-renders sharp within one frame.
 

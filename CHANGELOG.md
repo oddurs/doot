@@ -7,6 +7,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Renamed to doot.** The project was `terminator`, which is also the name
+  of a well-known GNOME terminal. The binary, bundle id, `TERM_PROGRAM`,
+  the recordings directory and the repository are all `doot` now; GitHub
+  redirects the old repository name. See
+  [the record](docs/roadmap/completed/sprint-n-rename-doot.md).
+
 ### Added
 
 - **Selection and copy.** Drag to select, double-click for a word,
@@ -30,7 +38,7 @@ All notable changes to this project are documented here. The format follows
 
 - **Every session is recorded to disk, and it is on by default.** One
   append-only `.trec` file per session under `~/Library/Application Support/
-  terminator/sessions/`, holding every byte the session printed with the time
+  doot/sessions/`, holding every byte the session printed with the time
   it arrived. `zig build replay -- SESSION.trec` rebuilds the terminal that
   file ends at; an end-to-end test asserts the rebuilt grid hashes the same as
   the live one, which is the claim the whole feature rests on.
@@ -131,5 +139,5 @@ shrinking the cell to 8 bytes, and per-row damage tracking.
 Selection and copy, reflow on resize, combining marks, Sixel/DCS rendering,
 mouse reporting, ligatures, and real bold/italic faces. See the README.
 
-[Unreleased]: https://github.com/oddurs/terminator/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/oddurs/terminator/releases/tag/v0.1.0
+[Unreleased]: https://github.com/oddurs/doot/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/oddurs/doot/releases/tag/v0.1.0

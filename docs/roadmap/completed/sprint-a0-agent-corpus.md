@@ -7,7 +7,7 @@ for the whole [agentic roadmap](../agentic.md).
 
 Record real agent sessions byte-for-byte, commit them as corpora, and from
 them produce two things: an audit table of every sequence each agent emits
-with what terminator does about it, and a measurement of the *shape* of
+with what doot does about it, and a measurement of the *shape* of
 agent output — bytes per write, writes per second, longest burst.
 
 The stated risk: "low. The risk is in what it finds — expect at least one
@@ -28,7 +28,7 @@ actually emit land on the arm for an unrelated one:
 Every agent CLI speaking the kitty keyboard protocol turns underline on in
 this terminal at startup and moves the cursor on exit. That is not a missing
 feature; the screen is wrong afterwards. Filed as
-[#28](https://github.com/oddurs/terminator/issues/28), left for
+[#28](https://github.com/oddurs/doot/issues/28), left for
 [A2](../agentic.md) to fix — A0's job was to find it, and the audit now
 carries a `MIS-HANDLED` row that turns green when it is.
 

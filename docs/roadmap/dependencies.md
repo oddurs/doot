@@ -342,7 +342,7 @@ runner; `lipo` makes the universal binary. [P0](platform.md)'s
 static-link question is retired unasked, and [P5](platform.md)'s Intel
 build is a flag.
 
-*Done when:* `otool -L zig-out/bin/terminator` lists only `/usr/lib` and
+*Done when:* `otool -L zig-out/bin/doot` lists only `/usr/lib` and
 `/System`; the release app opens on a Mac with no Homebrew; the release
 workflow's matrix has a comment explaining why it no longer needs one row
 per architecture.

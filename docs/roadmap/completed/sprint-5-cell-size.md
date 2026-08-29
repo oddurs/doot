@@ -1,7 +1,7 @@
 # Sprint 5 — Shrink the cell to 8 bytes
 
 **Retired. Never started.** Closed as not planned:
-[#11](https://github.com/oddurs/terminator/issues/11).
+[#11](https://github.com/oddurs/doot/issues/11).
 
 This is the most useful record in this directory, because it is the one where
 the plan removed work from itself.

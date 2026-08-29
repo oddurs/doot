@@ -1,6 +1,6 @@
 # Product priorities
 
-What terminator is for, in the order that decides a tie.
+What doot is for, in the order that decides a tie.
 
 1. **Beautiful.** Text that is right at every size, motion that is tied to
    the display, chrome that gets out of the way. This is the veto: a sprint
@@ -190,7 +190,7 @@ everything after it:
 
 Stated so they do not have to be re-decided.
 
-- **terminator does not ship an assistant.** It hosts them. Agents live in
+- **doot does not ship an assistant.** It hosts them. Agents live in
   the shell; the terminal's job is to make watching, steering and being
   interrupted by them excellent. No chat panel, no model, no API key.
 - **No telemetry.** Diagnostics are a flag the user runs and a file the user

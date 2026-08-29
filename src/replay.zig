@@ -1,6 +1,6 @@
 //! Materialize a recorded session: `.trec` in, `Terminal` out.
 //!
-//!   zig build replay -- ~/Library/Application\ Support/terminator/sessions/….trec
+//!   zig build replay -- ~/Library/Application\ Support/doot/sessions/….trec
 //!
 //! This is the other half of the claim [record.md](../docs/roadmap/record.md)
 //! makes. `rec.zig` says a session is an append-only log; this says the screen

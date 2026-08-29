@@ -1,6 +1,6 @@
 # Sprint R — Screen row ring
 
-**Done.** Shipped in [#5](https://github.com/oddurs/terminator/pull/5).
+**Done.** Shipped in [#5](https://github.com/oddurs/doot/pull/5).
 
 Lettered rather than numbered because it was never on the plan.
 [Sprint 0](sprint-0-benchmarks.md) found it.
@@ -64,7 +64,7 @@ to a vectorised copy. Twenty-two vectorised memcpys beat one scalar loop over
 1,760 cells.
 
 The `region` corpus was added to cover this, and the fast-path gap is tracked
-as [#12](https://github.com/oddurs/terminator/issues/12).
+as [#12](https://github.com/oddurs/doot/issues/12).
 
 ## Correctness
 

@@ -1,6 +1,6 @@
 # Sprint 1 — Get the vsync wait out of the lock
 
-**Done.** Closed [#7](https://github.com/oddurs/terminator/issues/7).
+**Done.** Closed [#7](https://github.com/oddurs/doot/issues/7).
 
 ## What was proposed
 
@@ -22,7 +22,7 @@ waited, and how fast the reader drained the PTY. `bench/dump.sh` cats the six
 corpora at the terminal and exits, so
 
 ```sh
-./zig-out/bin/terminator --frame-stats --shell bench/dump.sh
+./zig-out/bin/doot --frame-stats --shell bench/dump.sh
 ```
 
 is an end-to-end benchmark: real PTY, real parser, real grid, real frames.

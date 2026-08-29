@@ -11,7 +11,7 @@
 # branch, sharing one .git. Nothing else changes: same history, same
 # remotes, `gh` works the same.
 #
-#   scripts/worktree.sh new  <branch>   create ../terminator-wt/<branch> and print where
+#   scripts/worktree.sh new  <branch>   create ../<repo>-wt/<branch> and print where
 #   scripts/worktree.sh list            what exists, and what each is on
 #   scripts/worktree.sh done <branch>   remove it (refuses if it has uncommitted work)
 #   scripts/worktree.sh prune           forget worktrees whose directory is gone
@@ -20,11 +20,13 @@ set -eu
 
 # The main checkout, wherever this is run from. --show-toplevel would name
 # the *current* worktree, so run from inside one the root became
-# terminator-wt/terminator-wt and `done` could not find anything. The
+# <repo>-wt/<repo>-wt and `done` could not find anything. The
 # common git dir is the main checkout's .git no matter which worktree
 # asks.
 repo=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
-root=$(dirname "$repo")/terminator-wt
+# Named after the checkout, so a directory called doot gets doot-wt and one
+# still called doot keeps doot-wt.
+root=$(dirname "$repo")/$(basename "$repo")-wt
 
 usage() {
     sed -n '3,14p' "$0" | sed 's/^# \{0,1\}//'

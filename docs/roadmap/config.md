@@ -16,7 +16,7 @@ readable in any editor, diffable, copyable between machines, and
 explainable in one screen of `--help`.
 
 ```
-# ~/.config/terminator/config
+# ~/.config/doot/config
 
 font-family        = SF Mono
 font-size          = 14
@@ -32,7 +32,7 @@ keybind = cmd+t=new_tab
 keybind = cmd+shift+a=next_attention
 keybind = cmd+enter=text:\x1b\r
 
-config-file = ~/.config/terminator/work.conf
+config-file = ~/.config/doot/work.conf
 ```
 
 Rules of the format, all of them:
@@ -87,9 +87,9 @@ Derived from the struct by comptime reflection, so none of it can drift:
 - `--help`, one line per key from the doc comment's first sentence;
 - the template (K2), every key commented out with its default and doc.
 
-The file lives at `$XDG_CONFIG_HOME/terminator/config`, falling back to
-`~/.config/terminator/config`; on macOS
-`~/Library/Application Support/terminator/config` is read too, after
+The file lives at `$XDG_CONFIG_HOME/doot/config`, falling back to
+`~/.config/doot/config`; on macOS
+`~/Library/Application Support/doot/config` is read too, after
 it, for people who expect that. `--config-file` adds one more.
 
 Every constant that is really a setting becomes a key in this sprint:
@@ -116,7 +116,7 @@ hundred lines of comptime.
   lines appear in the grid for one frame set — file, line, message, in
   the theme's error colour — until a keypress. `stderr` gets them too,
   for scripts.
-- **`terminator +show-config`** prints the effective configuration:
+- **`doot +show-config`** prints the effective configuration:
   every key, its value, and where it came from — default, which file
   and line, or the flag. `--changes-only` shows what differs from
   default; `--default` shows the defaults alone.
@@ -128,7 +128,7 @@ hundred lines of comptime.
 
 The `+` form is Ghostty's convention for "this is not a terminal
 session"; it keeps flags for settings and `+verbs` for tools, and it is
-the shape [A6](agentic.md)'s `terminator open` will use too.
+the shape [A6](agentic.md)'s `doot open` will use too.
 
 *Done when:* `+show-config` on a file with an include shows the
 included file's line numbers; the error overlay is in the gallery.
@@ -168,7 +168,7 @@ swap on success, never apply a half-parsed file.
 A theme is a config file that sets only colour keys — `background`,
 `foreground`, `cursor-color`, `cursor-text`, `selection-background`,
 `selection-foreground`, `palette = N=#rrggbb` — found by `theme = name`
-in `~/.config/terminator/themes/name`, then among the bundled ones
+in `~/.config/doot/themes/name`, then among the bundled ones
 embedded in the binary. `theme = light:paper, dark:ink` picks by system
 appearance and switches live ([X4](experience.md)). `+list-themes`
 lists both directories; a theme file is a config file, so `+validate-
@@ -196,7 +196,7 @@ effect on reload; an `unbind` removes a default.
 
 ### K5 — The reference, generated (half a week, with W1)
 
-`site/build.py` asks the binary — `terminator +list-keys --json` — and
+`site/build.py` asks the binary — `doot +list-keys --json` — and
 renders `/docs/config/`: one page, every key, its type, default, doc,
 since-version, and whether it reloads live. The same doc comments back
 `+help`. Deprecated keys carry a `deprecated` note and a replacement,

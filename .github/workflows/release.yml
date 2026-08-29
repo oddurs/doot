@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Apple Silicon only. terminator links SDL3 and FreeType from
+        # Apple Silicon only. doot links SDL3 and FreeType from
         # Homebrew via pkg-config, so it cannot be cross-compiled -- an
         # x86_64 build needs an actual Intel runner with Intel brew kegs.
         include:
@@ -53,19 +53,19 @@ jobs:
       - name: Check the binary reports the tag
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
-          got=$(./zig-out/bin/terminator --version)
+          got=$(./zig-out/bin/doot --version)
           echo "$got"
           case "$got" in
-            "terminator ${tag#v}"|"terminator ${tag#v} ("*) ;;
+            "doot ${tag#v}"|"doot ${tag#v} ("*) ;;
             *) echo "binary reports '$got', expected version ${tag#v}" >&2; exit 1 ;;
           esac
 
       - name: Package
         run: |
           tag="${{ inputs.tag || github.ref_name }}"
-          name="terminator-${tag}-${{ matrix.arch }}-macos"
+          name="doot-${tag}-${{ matrix.arch }}-macos"
           mkdir -p "dist/${name}"
-          cp zig-out/bin/terminator "dist/${name}/"
+          cp zig-out/bin/doot "dist/${name}/"
           cp README.md LICENSE "dist/${name}/"
           tar -czf "dist/${name}.tar.gz" -C dist "${name}"
           # Record the basename, not the build path: whoever downloads
@@ -75,7 +75,7 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: terminator-${{ matrix.arch }}
+          name: doot-${{ matrix.arch }}
           path: dist/*.tar.gz*
           if-no-files-found: error
 

@@ -79,7 +79,7 @@ pub const Pty = struct {
             _ = c.setenv("COLORTERM", "truecolor", 1);
             // Identify ourselves the way iTerm, Apple Terminal and Ghostty
             // do, so shell config can special-case this terminal.
-            _ = c.setenv("TERM_PROGRAM", "terminator", 1);
+            _ = c.setenv("TERM_PROGRAM", "doot", 1);
             _ = c.setenv("TERM_PROGRAM_VERSION", version.string, 1);
             _ = c.unsetenv("LINES");
             _ = c.unsetenv("COLUMNS");

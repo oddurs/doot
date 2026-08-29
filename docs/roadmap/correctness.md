@@ -39,7 +39,7 @@ runs automatically against an external conformance suite.
 
 ### C0 — The conformance harness (one to two weeks)
 
-- **`terminator --headless`** — or a separate small binary — that attaches
+- **`doot --headless`** — or a separate small binary — that attaches
   the parser and terminal to a PTY with no window, answers queries, and
   can dump its grid. The e2e tests already do most of this in-process; this
   is the same thing as a program another program can drive. It is also the
@@ -132,10 +132,10 @@ net; land nothing here without both.
 
 `TERM=xterm-256color` with `COLORTERM=truecolor` is the right answer
 today: it is what every host has, and `ssh` to a machine without our
-terminfo is the classic failure. `TERM_PROGRAM=terminator` is already set
+terminfo is the classic failure. `TERM_PROGRAM=doot` is already set
 and is what shell integration and agents should key off.
 
-Ship a `terminator` terminfo entry only when C1 has made its claims true —
+Ship a `doot` terminfo entry only when C1 has made its claims true —
 then it can advertise `Tc`, `Smulx`, `Sync` and the kitty keyboard
 protocol honestly — and install it with the app, still defaulting to
 `xterm-256color` unless the entry is present on the host. `--version`
@@ -143,7 +143,7 @@ prints the Unicode version, the terminfo version and the protocol levels.
 
 *Gate:* not before C1.
 
-*Done when:* `infocmp terminator` on a machine with the app installed
+*Done when:* `infocmp doot` on a machine with the app installed
 lists every capability C1 and [A2](agentic.md) implement, and nothing
 they do not.
 

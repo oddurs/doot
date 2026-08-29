@@ -1,4 +1,4 @@
-//! terminator -- a terminal emulator.
+//! doot -- a terminal emulator.
 //!
 //! Threading model: one thread reads the PTY and feeds the parser; the main
 //! thread owns the window and draws. A single mutex guards the terminal state
@@ -193,7 +193,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     var renderer = try render.Renderer.init(
         alloc,
-        "terminator",
+        "doot",
         opts.font_size,
         opts.cols,
         opts.rows,
@@ -233,7 +233,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         else
             rec.defaultDir(&record_dir_buf) orelse "";
         if (dir.len == 0) {
-            std.debug.print("terminator: no place to keep recordings; not recording\n", .{});
+            std.debug.print("doot: no place to keep recordings; not recording\n", .{});
         } else {
             // Swept before the new file exists, so this session's own
             // recording is never a candidate. By mtime, which is what makes
@@ -251,7 +251,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
                 .record_input = opts.record_input,
             }) catch |err| blk: {
                 // A session that cannot be recorded is still a session.
-                std.debug.print("terminator: not recording this session: {t}\n", .{err});
+                std.debug.print("doot: not recording this session: {t}\n", .{err});
                 break :blk rec.Writer.disabled(alloc);
             };
         }
@@ -517,9 +517,9 @@ pub fn main(init: std.process.Init.Minimal) !void {
 }
 
 /// `--help` and `--version` are the program's output, not a diagnostic:
-/// `std.debug.print` goes to stderr, which would hand `v=$(terminator
+/// `std.debug.print` goes to stderr, which would hand `v=$(doot
 /// --version)` an empty string and write a zero-byte file for
-/// `terminator --version > v.txt`. Answers to questions go to stdout.
+/// `doot --version > v.txt`. Answers to questions go to stdout.
 fn stdout(comptime fmt: []const u8, args: anytype) void {
     var buf: [4096]u8 = undefined;
     const text = std.fmt.bufPrint(&buf, fmt, args) catch return;

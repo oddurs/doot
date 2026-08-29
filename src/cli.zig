@@ -240,7 +240,7 @@ fn utf8Floor(s: []const u8, n: usize) usize {
 }
 
 pub const help =
-    \\terminator -- a terminal emulator
+    \\doot -- a terminal emulator
     \\
     \\  --font-size N   point size, {d}-{d} (default {d})
     \\  --size CxR      initial grid, e.g. 200x60 (default {d}x{d}, max {d})
@@ -418,9 +418,9 @@ test "scale is parsed and bounded" {
     try testing.expectEqual(@as(?f32, null), parseScale("big"));
     try testing.expectEqual(@as(?f32, null), parseScale("nan"));
     // Unset means "ask the display", which is not the same as 1.
-    const bare = [_][*:0]const u8{"terminator"};
+    const bare = [_][*:0]const u8{"doot"};
     try testing.expectEqual(@as(?f32, null), parseArgs(&bare).run.scale);
-    const given = [_][*:0]const u8{ "terminator", "--scale", "2" };
+    const given = [_][*:0]const u8{ "doot", "--scale", "2" };
     try testing.expectEqual(@as(?f32, 2.0), parseArgs(&given).run.scale);
 }
 
@@ -440,8 +440,8 @@ test "the effective scale follows the display, and --scale outranks it" {
 
 test "argv is parsed into options" {
     const argv = [_][*:0]const u8{
-        "terminator", "--size",  "200x60", "--font-size", "18", "--frame-stats",
-        "--shell",    "/bin/sh",
+        "doot",    "--size",  "200x60", "--font-size", "18", "--frame-stats",
+        "--shell", "/bin/sh",
     };
     const opts = parseArgs(&argv).run;
     try testing.expectEqual(@as(u32, 200), opts.cols);
@@ -453,28 +453,28 @@ test "argv is parsed into options" {
 }
 
 test "a flag missing its value stops rather than reading past the end" {
-    const argv = [_][*:0]const u8{ "terminator", "--size" };
+    const argv = [_][*:0]const u8{ "doot", "--size" };
     const opts = parseArgs(&argv).run;
     try testing.expectEqual(@as(u32, default_cols), opts.cols);
     try testing.expectEqual(@as(u32, default_rows), opts.rows);
 }
 
 test "unknown arguments are ignored" {
-    const unknown = [_][*:0]const u8{ "terminator", "--nonsense", "--frame-stats" };
+    const unknown = [_][*:0]const u8{ "doot", "--nonsense", "--frame-stats" };
     try testing.expect(parseArgs(&unknown).run.frame_stats);
 }
 
 test "--help and --version are reported rather than acted on" {
     // Both win over anything else on the line: someone asking what this
     // is should not have a window opened at them.
-    const help_short = [_][*:0]const u8{ "terminator", "-h" };
+    const help_short = [_][*:0]const u8{ "doot", "-h" };
     try testing.expectEqual(Action.help, parseArgs(&help_short));
-    const help_long = [_][*:0]const u8{ "terminator", "--help", "--size", "10x10" };
+    const help_long = [_][*:0]const u8{ "doot", "--help", "--size", "10x10" };
     try testing.expectEqual(Action.help, parseArgs(&help_long));
 
-    const ver_short = [_][*:0]const u8{ "terminator", "-V" };
+    const ver_short = [_][*:0]const u8{ "doot", "-V" };
     try testing.expectEqual(Action.version, parseArgs(&ver_short));
-    const ver_long = [_][*:0]const u8{ "terminator", "--version" };
+    const ver_long = [_][*:0]const u8{ "doot", "--version" };
     try testing.expectEqual(Action.version, parseArgs(&ver_long));
 }
 
@@ -482,13 +482,13 @@ test "--help and --version win even after a flag that takes a value" {
     // The regression this guards: the main loop consumes the token after
     // `--shell`, so these used to be swallowed as a shell path or a size,
     // and the program opened a window and tried to exec `--version`.
-    const shell = [_][*:0]const u8{ "terminator", "--shell", "--version" };
+    const shell = [_][*:0]const u8{ "doot", "--shell", "--version" };
     try testing.expectEqual(Action.version, parseArgs(&shell));
-    const size = [_][*:0]const u8{ "terminator", "--size", "--help" };
+    const size = [_][*:0]const u8{ "doot", "--size", "--help" };
     try testing.expectEqual(Action.help, parseArgs(&size));
-    const shot = [_][*:0]const u8{ "terminator", "--screenshot", "-h" };
+    const shot = [_][*:0]const u8{ "doot", "--screenshot", "-h" };
     try testing.expectEqual(Action.help, parseArgs(&shot));
-    const font = [_][*:0]const u8{ "terminator", "--font-size", "-V" };
+    const font = [_][*:0]const u8{ "doot", "--font-size", "-V" };
     try testing.expectEqual(Action.version, parseArgs(&font));
 }
 
@@ -498,7 +498,7 @@ test "recording is on, and output-only, with no flags at all" {
     // The default the whole privacy shape rests on: output yes, keystrokes
     // no. If this test ever has to be changed, S6 of the security roadmap
     // has been changed with it.
-    const bare = [_][*:0]const u8{"terminator"};
+    const bare = [_][*:0]const u8{"doot"};
     const opts = parseArgs(&bare).run;
     try testing.expect(opts.record);
     try testing.expect(!opts.record_input);
@@ -509,7 +509,7 @@ test "recording is on, and output-only, with no flags at all" {
 
 test "the recording flags parse" {
     const argv = [_][*:0]const u8{
-        "terminator",           "--record-input", "--record-dir", "/tmp/rec",
+        "doot",                 "--record-input", "--record-dir", "/tmp/rec",
         "--record-retain-days", "3",
     };
     const opts = parseArgs(&argv).run;
@@ -519,28 +519,28 @@ test "the recording flags parse" {
     try testing.expectEqual(@as(u32, 3), opts.record_retain_days);
     try testing.expectEqual(RecordState.output_and_input, opts.recordState());
 
-    const none = [_][*:0]const u8{ "terminator", "--no-record" };
+    const none = [_][*:0]const u8{ "doot", "--no-record" };
     try testing.expectEqual(RecordState.off, parseArgs(&none).run.recordState());
 
-    const incog = [_][*:0]const u8{ "terminator", "--incognito" };
+    const incog = [_][*:0]const u8{ "doot", "--incognito" };
     const i = parseArgs(&incog).run;
     try testing.expect(!i.record);
     try testing.expectEqual(RecordState.incognito, i.recordState());
 
     // Zero is a real value -- keep forever -- not a parse failure.
-    const forever = [_][*:0]const u8{ "terminator", "--record-retain-days", "0" };
+    const forever = [_][*:0]const u8{ "doot", "--record-retain-days", "0" };
     try testing.expectEqual(@as(u32, 0), parseArgs(&forever).run.record_retain_days);
     // And an unreadable one leaves the default rather than meaning zero.
-    const junk = [_][*:0]const u8{ "terminator", "--record-retain-days", "soon" };
+    const junk = [_][*:0]const u8{ "doot", "--record-retain-days", "soon" };
     try testing.expectEqual(@as(u32, default_retain_days), parseArgs(&junk).run.record_retain_days);
 }
 
 test "asking to record input into a session that is not recorded records nothing" {
     // In either order. Two flags that contradict each other must resolve to
     // the private answer, not to whichever came last.
-    const a = [_][*:0]const u8{ "terminator", "--record-input", "--incognito" };
-    const b = [_][*:0]const u8{ "terminator", "--incognito", "--record-input" };
-    const c = [_][*:0]const u8{ "terminator", "--record-input", "--no-record" };
+    const a = [_][*:0]const u8{ "doot", "--record-input", "--incognito" };
+    const b = [_][*:0]const u8{ "doot", "--incognito", "--record-input" };
+    const c = [_][*:0]const u8{ "doot", "--record-input", "--no-record" };
     for ([_][]const [*:0]const u8{ &a, &b, &c }) |argv| {
         const opts = parseArgs(argv).run;
         try testing.expect(!opts.record);
@@ -611,7 +611,7 @@ test "cutting a long title never splits a codepoint" {
 }
 
 test "argv with no arguments at all is a plain run" {
-    const bare = [_][*:0]const u8{"terminator"};
+    const bare = [_][*:0]const u8{"doot"};
     try testing.expectEqual(@as(u32, default_cols), parseArgs(&bare).run.cols);
     const empty: [0][*:0]const u8 = .{};
     try testing.expectEqual(@as(u32, default_cols), parseArgs(&empty).run.cols);
@@ -636,19 +636,19 @@ test "a malformed select spec is declined whole" {
 }
 
 test "the selection flags parse, and default off" {
-    const bare = [_][*:0]const u8{"terminator"};
+    const bare = [_][*:0]const u8{"doot"};
     const none = parseArgs(&bare).run;
     try testing.expect(!none.copy_on_select);
     try testing.expectEqual(@as(?Select, null), none.select);
 
-    try testing.expect(!parseArgs(&[_][*:0]const u8{"terminator"}).run.select_rect);
-    const rect = [_][*:0]const u8{ "terminator", "--select-rect", "--select", "1,2,3,4" };
+    try testing.expect(!parseArgs(&[_][*:0]const u8{"doot"}).run.select_rect);
+    const rect = [_][*:0]const u8{ "doot", "--select-rect", "--select", "1,2,3,4" };
     const rect_opts = parseArgs(&rect).run;
     // Order-independent of `--select`, which is why it is a flag of its own.
     try testing.expect(rect_opts.select_rect);
     try testing.expectEqual(@as(u32, 1), rect_opts.select.?.r0);
 
-    const argv = [_][*:0]const u8{ "terminator", "--copy-on-select", "--select", "1,2,3,4" };
+    const argv = [_][*:0]const u8{ "doot", "--copy-on-select", "--select", "1,2,3,4" };
     const opts = parseArgs(&argv).run;
     try testing.expect(opts.copy_on_select);
     try testing.expectEqual(@as(u32, 4), opts.select.?.c1);

@@ -153,10 +153,10 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     const argv = init.args.vector;
     if (argv.len < 2) {
-        std.debug.print("usage: gallery <path-to-terminator> [--update]\n", .{});
+        std.debug.print("usage: gallery <path-to-doot> [--update]\n", .{});
         std.process.exit(2);
     }
-    const terminator = std.mem.span(argv[1]);
+    const doot = std.mem.span(argv[1]);
     var update = false;
     for (argv[2..]) |a| {
         if (std.mem.eql(u8, std.mem.span(a), "--update")) update = true;
@@ -210,7 +210,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         var argv_list: std.ArrayList([]const u8) = .empty;
         defer argv_list.deinit(gpa);
         try argv_list.appendSlice(gpa, &.{
-            terminator,    "--shell",     scene_path, "--size", size,
+            doot,          "--shell",     scene_path, "--size", size,
             "--font-size", font_size,     "--scale",  scale,    "--screenshot",
             out_path,
             // A gallery capture is a test, not a session. Without this
