@@ -53,8 +53,30 @@ pub const Parser = struct {
     utf8_cp: u21 = 0,
     utf8_need: u3 = 0,
 
+    /// Drive the state machine over `bytes`.
+    ///
+    /// In the ground state a run of printable ASCII is handed to the handler
+    /// as one slice through `printRun` rather than one `print` per byte. That
+    /// is the common case by a wide margin -- `cat` of a source file is
+    /// nothing else -- and it lets the terminal do one wrap check per row
+    /// segment instead of re-deriving width and margins per character. The
+    /// run stops at anything outside 0x20..0x7e, so ESC, controls and UTF-8
+    /// lead bytes still go through `advance` exactly as before, and a run cut
+    /// in two by a read boundary is indistinguishable from a whole one.
     pub fn feed(self: *Parser, handler: anytype, bytes: []const u8) void {
-        for (bytes) |b| self.advance(handler, b);
+        var i: usize = 0;
+        while (i < bytes.len) {
+            if (self.state == .ground and self.utf8_need == 0) {
+                const start = i;
+                while (i < bytes.len and bytes[i] >= 0x20 and bytes[i] <= 0x7e) i += 1;
+                if (i > start) {
+                    handler.printRun(bytes[start..i]);
+                    continue;
+                }
+            }
+            self.advance(handler, bytes[i]);
+            i += 1;
+        }
     }
 
     pub fn advance(self: *Parser, handler: anytype, b: u8) void {
@@ -291,6 +313,9 @@ const Recorder = struct {
         const n = std.unicode.utf8Encode(cp, &buf) catch return;
         self.out.appendSlice(self.alloc, buf[0..n]) catch {};
     }
+    fn printRun(self: *Recorder, bytes: []const u8) void {
+        self.out.appendSlice(self.alloc, bytes) catch {};
+    }
     fn execute(self: *Recorder, b: u8) void {
         self.emit("<x{x:0>2}>", .{b});
     }
@@ -335,6 +360,25 @@ test "utf-8 is decoded across byte boundaries" {
     p.feed(&rec, "\x94");
     p.feed(&rec, "\x80");
     try testing.expectEqualStrings("\u{2500}", rec.out.items);
+}
+
+test "a printable run cut by a feed boundary reads the same as a whole one" {
+    var rec = Recorder{ .alloc = testing.allocator };
+    defer rec.out.deinit(testing.allocator);
+    var p = Parser{};
+    p.feed(&rec, "hel");
+    p.feed(&rec, "lo \x1b[1mwor");
+    p.feed(&rec, "ld\r\n");
+    try testing.expectEqualStrings("hello <csi 1 m>world<x0d><x0a>", rec.out.items);
+}
+
+test "a printable run stops at a utf-8 lead byte and resumes after it" {
+    // 0xc3 0xa9 is e-acute. The run must end before the lead byte, the
+    // codepoint must decode through the slow path, and the run after it
+    // must not be swallowed into the continuation.
+    const got = try run(testing.allocator, "caf\xc3\xa9 ok");
+    defer testing.allocator.free(got);
+    try testing.expectEqualStrings("caf\u{e9} ok", got);
 }
 
 test "csi with parameters" {
