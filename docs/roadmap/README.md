@@ -54,6 +54,7 @@ about the plan. The two retired ones are the most useful of the seven.
 
 | Record | Outcome |
 |---|---|
+| [Sprint V0 — make 0.1.0 true](completed/sprint-v0-make-010-true.md) | Tagging ran a CI path that had never executed. Two bugs fell out. |
 | [Sprint 0 — benchmarks](completed/sprint-0-benchmarks.md) | Built the harness. Immediately falsified the plan that commissioned it. |
 | [Sprint R — screen row ring](completed/sprint-r-screen-ring.md) | 1.7–3.8×. Was not on the roadmap at all. |
 | [Sprint 1 — vsync out of the lock](completed/sprint-1-vsync-lock.md) | ~150× on bulk output. Brought the frame timer the bench could not. |

@@ -52,7 +52,8 @@ prints it, and the changelog's links resolve.
 
 *Risk:* none. This is a day of making the repository agree with itself.
 
-*Result:* done. `build.zig.zon`'s `.version` is the source of truth, read
+*Result:* done — see [the record](completed/sprint-v0-make-010-true.md).
+`build.zig.zon`'s `.version` is the source of truth, read
 by `build.zig` and handed to `src/version.zig` as a build option along with
 the short commit; `pty.zig` no longer owns a copy. `--version` (and `-V`)
 prints `terminator 0.1.0 (faac302)`. `scripts/changelog-section.sh` extracts
