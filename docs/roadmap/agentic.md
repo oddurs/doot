@@ -274,9 +274,10 @@ the maintainer's or a user's. It is cheap to defer and, once shipped, an
 API to maintain.
 
 *Why here:* it needs A3 (`wait` is meaningless without prompt marks) and A5
-(tabs to open). Security is the whole design: the socket is opt-in, per
+(tabs to open). Security is the whole design — the socket is opt-in, per
 user, and the token is passed to children in the environment so only
-programs the terminal started can reach it.
+programs the terminal started can reach it — and it is written down as
+[S4](security.md), which lands with this sprint.
 
 *Done when:* an e2e test opens a tab over the socket, runs a command, waits
 for the prompt and reads the screen back; a stranger's process on the same

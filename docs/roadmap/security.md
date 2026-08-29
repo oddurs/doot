@@ -1,0 +1,237 @@
+# Security roadmap
+
+A terminal parses hostile bytes for a living. Anything that writes to it —
+`cat` on a downloaded file, a compromised host over `ssh`, an agent
+printing whatever a web page told it to — controls the input to the
+parser, and the parser's job is to make sure that input can paint the
+screen and nothing else. Sized for one person at 8–12 focused hours a
+week. Sprint prefix: **S**.
+
+Arbiter: **the policy table and the fuzzer.** Every sequence that could
+carry bytes *out* of the terminal — a reply, a clipboard write, a link, a
+paste — has a row in the table below saying what is allowed, and a test
+that proves the forbidden case emits nothing. Every parser of untrusted
+input has a fuzz target that runs in CI.
+
+## The threat model
+
+Four attackers, in the order they matter.
+
+1. **A program writing to the terminal.** It wants to run a command as
+   the user (inject bytes into the shell's input), read something (the
+   clipboard, the screen, the title), or spoof the display (hide what
+   was really run). This is the one `SECURITY.md` already describes and
+   the one every sprint below serves.
+2. **A file the user opens.** A font in `~/Library/Fonts`, a config
+   file, a corpus, a PNG inside an emoji font. After
+   [D1](dependencies.md) and [D2](dependencies.md) those parsers are
+   ours, and ours to fuzz.
+3. **A local process.** Once [A6](agentic.md)'s socket exists, another
+   user's process on the same machine must not be able to type into a
+   tab.
+4. **The build.** What lands in the release binary and how anyone could
+   check.
+
+Not an attacker: the user at the keyboard. `--shell`, `--screenshot`
+and `--font` take what they are given; if you can pass arguments you
+can already run anything, as `SECURITY.md` says.
+
+## Where we are
+
+| | Today | Where |
+|---|---|---|
+| Release build | **ReleaseFast** — bounds and overflow checks off in the code that parses hostile bytes | `release.yml`, `ci.yml` matrix has no ReleaseSafe row |
+| Replies to the child | DA1 and DSR 5/6 only. **Nothing echoes screen, title or clipboard content back.** The property to keep | `deviceStatusReport`, `deviceAttributes` |
+| Title query (XTWINOPS 21) | Not implemented — correct; it is the classic injection vector | — |
+| OSC 52 clipboard | Not implemented. [A2](agentic.md) adds write, and read only behind a config key | `oscDispatch` `else` |
+| Paste | Bracketed when the app asks. **Otherwise raw**: a clipboard containing `\n` executes on paste; one containing `\x1b` is parsed as typed | `handleKey` `Cmd V` → `sendToPty` |
+| Hyperlinks, path open | Not implemented; [A4](agentic.md) needs a policy before it exists | — |
+| DCS, APC, SOS, PM | Swallowed to ST, never answered | `vt.zig` `string_ignore` |
+| Notification text | Not implemented; [A1](agentic.md) will put child-controlled text in a system notification | — |
+| Child environment | Inherits the parent's; sets `TERM`, `COLORTERM`, `TERM_PROGRAM`, unsets `LINES`/`COLUMNS` | `pty.zig` |
+| Network | **None.** [P3](platform.md) adds one request, behind a key | — |
+| Font files | Parsed by FreeType; ours after D1 | `font.zig` |
+| Fuzzing | None | — |
+| Actions | Pinned by major tag (`@v5`), not SHA; Dependabot keeps them current (its first PR is open) | `.github/workflows/`, `dependabot.yml` |
+| Build inputs | Zig pinned to 0.16.0; SDL3 and FreeType at whatever Homebrew has that day | `release.yml` |
+| Reproducibility | Not checked | — |
+| Signing | None ([P1](platform.md)) | — |
+| Disclosure | `SECURITY.md`: private advisories, a week to acknowledge, scope stated | `SECURITY.md` |
+
+The strongest line in that table is the third one, and it is there by
+accident of not having implemented the queries yet. S0 makes it a rule.
+
+## The policy table
+
+The rule: **the terminal never sends the child bytes derived from screen
+content, the title, the clipboard, or another tab.** Replies carry only
+what the child could already know — modes, capabilities, cursor
+position.
+
+| Sequence | Direction | Policy |
+|---|---|---|
+| DA1, DA2, XTVERSION, DECRQM, DSR 5/6, XTWINOPS 14/16/18 | reply | Allowed: capabilities, modes, geometry. |
+| XTWINOPS 21 (report title), 20 (report icon) | reply | **Never.** Title is child-controlled; reporting it is an injection channel. |
+| DECRQSS, DECRQCRA (checksum of screen), XTGETTCAP | reply | Refused until a program is found that needs it; DECRQCRA never — it reads the screen. |
+| OSC 52 write | out to clipboard | Allowed by default; capped at 1 MiB; config key to disable. |
+| OSC 52 read | reply | **Off by default.** Key to enable; the docs say what it means. |
+| OSC 8 link | on click only | Schemes `http`, `https`, `mailto`; `file` with a confirm; anything else shown and not opened. The URI is displayed before opening. |
+| Path open ([A4](agentic.md)) | subprocess | Editor invoked with `--` and an absolute path; never through a shell. |
+| OSC 0/2 title, OSC 9/777 notification text | to the OS | C0 and C1 stripped; length-capped; never interpreted. |
+| Paste, bracketed mode off | into the PTY | **Guarded** (S1): `\n`, `\r`, `\x1b` or any C0 prompts once, shows what will be sent. |
+| Paste, bracketed mode on | into the PTY | Sent inside the markers; a `\x1b[201~` inside the payload is stripped so the paste cannot close its own bracket. |
+| DCS, APC, SOS, PM | — | Swallowed. Stays that way. |
+| Remote-control socket ([A6](agentic.md)) | in | Token, 0600, per user; see S4. |
+
+## The sprints
+
+### S0 — The threat model and the table, made binding (two days)
+
+Move the two sections above into `docs/security.md` (the roadmap keeps
+the sprints; the policy needs a permanent home) and give every row a
+test: for each forbidden reply, a unit test feeds the sequence and
+asserts `replies` is empty; for each allowed one, asserts the reply
+contains no byte from the screen. `SECURITY.md` links the policy and
+says the rule in one sentence.
+
+*Why here:* before [A2](agentic.md) and [C1](correctness.md) add the
+first batch of new replies. A policy written after the queries exist is
+a list of exceptions.
+
+*Done when:* the table has a test per row, and `SECURITY.md`'s scope
+section cites it.
+
+*Risk:* none.
+
+### S1 — Safe defaults for untrusted output (one week)
+
+- **The paste guard.** When bracketed paste is off and the clipboard
+  holds a newline, a carriage return, an escape or any other C0, show
+  one line in the grid — *paste contains 3 lines and 1 control
+  character; ⏎ to send, Esc to cancel* — and send only on confirm. A
+  config key disables it. kitty, iTerm2 and WezTerm all ship a version
+  of this; the attack it stops is a web page that puts
+  `innocuous\ncurl … | sh\n` on the clipboard.
+- **Bracket integrity.** Strip `\x1b[201~` from a bracketed payload.
+- **Title and notification hygiene.** Strip C0/C1, cap at 1 KiB, before
+  `setTitle` or [A1](agentic.md)'s notification call.
+- **The OSC 52 keys**, the OSC 8 scheme list and the confirm, landing
+  with [A2](agentic.md) and [A4](agentic.md) rather than after them —
+  this sprint owns the policy; those own the feature.
+
+*Done when:* an e2e test pastes a two-line clipboard with bracketed
+mode off and asserts nothing reached the PTY until confirm; a unit test
+proves a bracketed payload cannot close its own bracket.
+
+*Risk:* low. The guard is a UI decision more than a security one, and
+the config key is for the people who disagree.
+
+### S2 — Memory safety in the release build (one week) — **gated on a number**
+
+Build with `ReleaseSafe` and run the bench and `--frame-stats`. Zig's
+safety checks — bounds, overflow, unreachable — turn a hostile-bytes bug
+from silent corruption into a panic, which for a terminal is the right
+failure. The cost is unknown until measured, and the plan says so.
+
+*Gate:* if `ReleaseSafe` is within **10%** of `ReleaseFast` on every
+corpus, the release build becomes `ReleaseSafe` and the matrix gains
+the row. If it is not, find where — almost certainly the printable-run
+loop [Sprint 4](completed/sprint-4-print-run.md) built — and mark that
+one block `@setRuntimeSafety(false)` with a comment naming the fuzz
+target that covers it. Everything else ships safe.
+
+Either way, this sprint adds `ReleaseSafe` to CI, and hands
+[testing.md](testing.md)'s T1 its list of fuzz targets: `vt.Parser`,
+`Terminal` operations, the config parser ([E5](essentials.md)), the
+font parser ([D1](dependencies.md)), the PNG decoder
+([D2](dependencies.md)), the GSUB reader ([D3](dependencies.md)), and
+the remote-control protocol ([A6](agentic.md)). Every parser of bytes
+the user did not type.
+
+*Done when:* the bench numbers for both modes are in this file; the
+release workflow builds whichever the gate chose; the CI matrix has
+three optimize rows.
+
+*Risk:* low. The worst case is a documented 10% and a fuzzed hot loop.
+
+### S3 — The build you can check (half a week)
+
+- **Pin Actions by SHA.** Dependabot already groups and bumps them; it
+  bumps SHAs too. The open Dependabot PR is the proof it works.
+- **Pin what Homebrew installs** in `release.yml` — formula versions,
+  not "latest" — until [D5](dependencies.md) removes the question.
+- **Reproducible release.** The release workflow builds twice, in two
+  jobs, and fails if the SHA-256 differs. Zig is deterministic for the
+  same toolchain and inputs; assert it rather than assume it.
+- **Least privilege in workflows.** `permissions:` blocks exist in
+  both; make CI's read-only and release's `contents: write` the only
+  grant.
+- **The signing key** ([P1](platform.md)) lives in a GitHub environment
+  with a required reviewer — the maintainer — so a workflow change
+  cannot silently sign.
+- **An SBOM that fits on one line**: after D5, the link line from
+  `otool -L` and the Zig version, printed in the release notes.
+
+*Done when:* `grep uses: .github/workflows/*.yml` shows only SHAs; a
+release run shows two matching checksums.
+
+*Risk:* none.
+
+### S4 — The remote-control boundary (half a week, with A6) — **gated on A6**
+
+The socket is a way for a process to type into the terminal, so it is
+held to the same rule as everything else on this page.
+
+- A per-user directory, mode 0700, socket 0600.
+- A random token, generated at start, passed to children in the
+  environment and required on every connection. A process that did not
+  start under this terminal does not have it.
+- A size cap per message and a rate cap per connection.
+- `--no-remote` disables it; `--headless` binds nothing unless asked.
+- `send` into a tab is subject to the paste guard's rules — a control
+  character from the socket is a control character.
+
+*Done when:* an e2e test connects without the token and is refused;
+with it, is accepted; a second user on the machine cannot connect at
+all.
+
+*Risk:* low in code. The design is the whole thing, and it is above.
+
+### S5 — Least privilege in the app (half a week, with P1)
+
+- Entitlements: none beyond the hardened runtime's defaults. A PTY
+  needs nothing. After [D5](dependencies.md) there are no dylibs, so no
+  library-validation exception.
+- `Info.plist` usage descriptions: absent, because nothing is used.
+- The one network call ([P3](platform.md)) is documented in
+  `SECURITY.md` as the one network call, with its config key.
+- `--screenshot` and the panic corpus ([C4](correctness.md)) write only
+  where told, and the panic corpus only when asked.
+
+*Done when:* `codesign -d --entitlements -` on the release prints the
+minimal set, and the release notes quote it.
+
+*Risk:* none.
+
+## Why this order
+
+- **S0 before A2 and C1**, so the first new replies are written against
+  a policy instead of becoming one.
+- **S1 early** because the paste guard closes the one attack a user can
+  meet today, and it is a week.
+- **S2 gated on a number** the bench can give in an afternoon.
+- **S3 whenever**; it is configuration.
+- **S4 and S5 ride their sprints.**
+
+## Not on this plan
+
+- **Sandboxing the terminal.** A terminal exists to run a shell with
+  the user's privileges; a sandbox that allowed that would not be one.
+- **Filtering what programs may print.** The parser is the filter. A
+  sequence is either handled, ignored, or swallowed; there is no
+  allowlist of programs.
+- **Auditing SDL3 or FreeType.** They are being removed
+  ([dependencies.md](dependencies.md)); the time goes to fuzzing what
+  replaces them.
+- **A bug bounty.** `SECURITY.md` promises a straight answer within a
+  week, which is what a personal project can honestly offer.

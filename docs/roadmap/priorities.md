@@ -41,6 +41,9 @@ decides whether a sprint is done. A claim without one is labelled a guess.
 | [dependencies.md](dependencies.md) | Own the GPU path, the rasterizer, the shaper, the window; one binary | `otool -L` and the gallery | D |
 | [releases.md](releases.md) | What a version promises, the release train, milestones, notes, support | The tag | V |
 | [website.md](website.md) | The marketing site on GitHub Pages, rendered from what the repository produces | A fresh visitor and Lighthouse | W |
+| [security.md](security.md) | The threat model, the reply policy, paste guard, memory safety in release, the build you can check | The policy table and the fuzzer | S |
+| [testing.md](testing.md) | The layers, the differential model, fuzzing, replay, gating the bench, CI hygiene | CI under five minutes with every arbiter in it | T |
+| [compatibility.md](compatibility.md) | Linux, Windows, the browser; what "platform" means on each; the program matrix | The CI matrix and the compatibility matrix | M |
 
 ## The one rule, generalised
 
@@ -131,12 +134,25 @@ After that: X1 typography (the format flip already happened in D0; this
 is faces and metrics), E5 config, A5 tabs, C1 sequences, P1 signing — in
 whichever order the previous twelve have made most urgent.
 
-Two roadmaps run beside the order rather than in it. [V0](releases.md)
-is a day and should happen before row 1, since the repository currently
-describes a `0.1.0` that was never tagged; V1 puts a release train under
-the first sprint that lands. [W0](website.md) is a week that can happen
-any time after that — the `--screenshot` flag means the site can carry a
-real frame today — and W4, the launch, is gated on the 0.5 release.
+Five roadmaps run beside the order rather than in it, each with one
+sprint that should happen early because it is short and fences
+everything after it:
+
+- [V0](releases.md), a day, before row 1: the repository currently
+  describes a `0.1.0` that was never tagged. V1 then puts a release
+  train under the first sprint that lands.
+- [S0](security.md), two days, before A2 and C1 add the first new
+  replies: the rule that the terminal never sends the child bytes
+  derived from the screen, the title or the clipboard, made binding by
+  a test per row.
+- [T0](testing.md), a week, whenever: the differential model and the
+  mutants that Sprint R's review built by hand, committed; the golden
+  checksum the bench already prints, asserted.
+- [M0](compatibility.md), half a week: the core builds for Linux,
+  Windows and wasm today; a CI row per target keeps it so.
+- [W0](website.md), a week, any time after V0: the `--screenshot` flag
+  means the site can carry a real frame today. W4, the launch, is gated
+  on the 0.5 release.
 
 ## Non-goals
 
@@ -147,9 +163,11 @@ Stated so they do not have to be re-decided.
   interrupted by them excellent. No chat panel, no model, no API key.
 - **No telemetry.** Diagnostics are a flag the user runs and a file the user
   attaches.
-- **macOS first, finished, then elsewhere.** The Linux-shaped decisions
-  (`forkpty`, a platform interface with glue behind it) are already made;
-  the port waits until the Mac experience is complete ([P5](platform.md)).
+- **macOS first, finished, then elsewhere.** The port-shaped decisions
+  (`forkpty`, a platform interface with glue behind it) are already
+  made, and the core is kept provably portable on every PR
+  ([M0](compatibility.md)); the Linux and Windows ports themselves wait
+  until the Mac experience is complete ([M2, M3](compatibility.md)).
 - **Not a multiplexer.** Tabs and, later, splits — but sessions live and die
   with the window. Persistence is a daemon and a different program.
 - **No from-scratch kernel interface, IME, or window system.** Owning the

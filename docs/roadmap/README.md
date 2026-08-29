@@ -28,6 +28,15 @@ thing that decides whether a sprint is done — and opens by building it.
 - [website.md](website.md) — the marketing site on GitHub Pages, rendered
   from what the repository already produces. Judged by a fresh visitor
   and Lighthouse.
+- [security.md](security.md) — the threat model and the reply policy,
+  paste guard, memory safety in the release build, a build you can
+  check. Judged by the policy table and the fuzzer.
+- [testing.md](testing.md) — the layers, the differential model, fuzzing,
+  replay of real programs, gating the bench. Judged by CI under five
+  minutes with every other arbiter in it.
+- [compatibility.md](compatibility.md) — Linux, Windows and the browser,
+  what "platform" means on each, and the program matrix. Judged by the
+  CI matrix.
 
 ## Completed and retired
 
