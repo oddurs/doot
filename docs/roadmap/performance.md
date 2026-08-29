@@ -3,7 +3,12 @@
 Sprints against bottlenecks located in the source and then confirmed — or
 refuted — by measurement. Sized for one person at 8–12 focused hours a week.
 
-`zig build bench` is the arbiter. `bench/baseline.txt` is the number to beat.
+`zig build bench` is the arbiter — see [benchmarking](../benchmarking.md).
+`bench/baseline.txt` is the number to beat.
+
+Finished and retired sprints keep their own records under
+[completed/](completed/): what was proposed, what was measured, and what it
+changed about this plan.
 
 ## Status
 

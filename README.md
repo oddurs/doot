@@ -82,9 +82,9 @@ spec, and a test that fails without your fix is worth more than a paragraph
 explaining it.
 
 The "Not done yet" list above is the feature roadmap — selection and copy is
-the biggest gap. For performance work, [ROADMAP.md](ROADMAP.md) sequences six
-sprints against bottlenecks located in the source, with `zig build bench` as
-the arbiter.
+the biggest gap. For performance work, [docs/roadmap/](docs/roadmap/) tracks
+the sprints, what shipped, and what measurement retired, with `zig build bench`
+as the arbiter.
 
 By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md). To
 report a security issue, see [SECURITY.md](SECURITY.md) — please do not open a

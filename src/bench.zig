@@ -1,6 +1,6 @@
 //! Performance benchmarks.
 //!
-//! Sprint 0 of ROADMAP.md. Everything else on that plan claims a win, and
+//! Sprint 0 of docs/roadmap/performance.md. Everything else on that plan claims a win, and
 //! without a baseline none of those claims can be defended -- nor can the
 //! last sprint be talked out of, which is just as valuable.
 //!
