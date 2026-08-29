@@ -180,6 +180,27 @@ pub fn build(b: *std.Build) void {
     const record_step = b.step("record", "Record a command's terminal output as a corpus");
     record_step.dependOn(&record_run.step);
 
+    // The replayer: a recorded session back into a Terminal, and the grid
+    // checksum that says whether the replay matches what was on screen.
+    //
+    // std only -- vt, grid, terminal, check and rec import nothing but std
+    // and libc -- so this needs neither SDL nor FreeType and runs on the
+    // Linux CI runner. Installed as well as runnable through the step,
+    // because a recording is usually somewhere other than the build root.
+    const replay_mod = b.createModule(.{
+        .root_source_file = b.path("src/replay.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const replay_exe = b.addExecutable(.{ .name = "replay", .root_module = replay_mod });
+    b.installArtifact(replay_exe);
+    const replay_run = b.addRunArtifact(replay_exe);
+    replay_run.has_side_effects = true;
+    if (b.args) |args| replay_run.addArgs(args);
+    const replay_step = b.step("replay", "Replay a recorded session and print its grid checksum");
+    replay_step.dependOn(&replay_run.step);
+
     // The corpus guard: a committed recording must not carry a secret.
     // The check is "redacting it changes nothing", using the same
     // redact.zig the recorder applies at capture time.

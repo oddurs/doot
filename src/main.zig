@@ -19,6 +19,7 @@ const input = @import("input.zig");
 const render = @import("render.zig");
 const stats = @import("stats.zig");
 const cli = @import("cli.zig");
+const rec = @import("rec.zig");
 const version = @import("version.zig");
 const Terminal = @import("terminal.zig").Terminal;
 const Pty = @import("pty.zig").Pty;
@@ -54,6 +55,22 @@ const App = struct {
     parser: vt.Parser = .{},
     pty: Pty,
 
+    /// Guards the session recorder, which three writers reach: the reader
+    /// thread (`output`), the main thread (`input`, `focus`), and the main
+    /// thread again from inside the terminal mutex (`resize`, `control`).
+    ///
+    /// **Lock order, where both are held: terminal first, then recorder.**
+    /// The two sites that nest are `resize` and `control`, and they nest
+    /// because `Terminal.resize` and `Terminal.fullReset` run under the
+    /// terminal mutex -- that mutex is what orders them against a concurrent
+    /// `parser.feed`, so it is what decides where their records belong. The
+    /// reader thread never nests: it records, releases this, and only then
+    /// takes the terminal mutex, so the terminal mutex hold is byte for byte
+    /// what it was before recording existed. That is the whole point of
+    /// sprint 1, and the `lock` column in `--frame-stats` is what says so.
+    rec_mutex: Mutex,
+    rec: rec.Writer,
+
     running: std.atomic.Value(bool) = .init(true),
     /// A wake event is already queued, so don't queue another. Without this,
     /// a command producing megabytes of output floods the SDL event queue
@@ -79,12 +96,28 @@ fn readerThread(app: *App) void {
 
     var buf: [65536]u8 = undefined;
     while (app.running.load(.acquire)) {
+        // The recorder's flush timer, and it costs nothing to have: the
+        // wait below already returns every 100 ms when the pty is quiet, so
+        // the 250 ms flush needs no timer thread and no clock syscall of
+        // its own.
+        app.rec_mutex.lock();
+        app.rec.maybeFlush(stats.nowNs());
+        app.rec_mutex.unlock();
+
         if (!app.pty.waitReadable(100)) continue;
         const n = app.pty.read(&buf) catch |err| switch (err) {
             error.WouldBlock => continue,
             else => break,
         };
         if (n == 0) break; // child closed the terminal
+
+        // Recorded before it is parsed, so a crash between the two loses
+        // nothing that was already on the wire. Under the recorder mutex
+        // only -- never nested with the terminal mutex, which is what keeps
+        // the lock column where sprint 1 left it.
+        app.rec_mutex.lock();
+        app.rec.output(buf[0..n], stats.nowNs());
+        app.rec_mutex.unlock();
 
         app.mutex.lock();
         app.parser.feed(&app.term, buf[0..n]);
@@ -111,8 +144,9 @@ pub fn main(init: std.process.Init.Minimal) !void {
         .run => |o| o,
         .help => {
             stdout(cli.help, .{
-                cli.min_font_size, cli.max_font_size, cli.default_font_size,
-                cli.default_cols,  cli.default_rows,  cli.max_dim,
+                cli.min_font_size,       cli.max_font_size, cli.default_font_size,
+                cli.default_cols,        cli.default_rows,  cli.max_dim,
+                cli.default_retain_days,
             });
             std.process.exit(0);
         },
@@ -141,12 +175,47 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     var app = App{
         .mutex = .init(),
+        .rec_mutex = .init(),
+        // Replaced below when this session is being recorded. A disabled
+        // recorder owns nothing and every method on it is a no-op, so
+        // `--no-record` and `--incognito` need no branch at any call site.
+        .rec = rec.Writer.disabled(alloc),
         .term = try Terminal.init(alloc, size.cols, size.rows),
         .pty = try Pty.open(@intCast(size.cols), @intCast(size.rows), opts.shell),
     };
     defer app.mutex.deinit();
+    defer app.rec_mutex.deinit();
+    defer app.rec.deinit();
     defer app.term.deinit();
     defer app.pty.deinit();
+
+    // Recording is on by default, and visible: the window title says so for
+    // as long as it is happening. See docs/roadmap/record.md.
+    var record_dir_buf: [std.c.PATH_MAX]u8 = undefined;
+    if (opts.record) {
+        const dir = if (opts.record_dir) |d|
+            @as([]const u8, d)
+        else
+            rec.defaultDir(&record_dir_buf) orelse "";
+        if (dir.len == 0) {
+            std.debug.print("terminator: no place to keep recordings; not recording\n", .{});
+        } else {
+            // Swept before the new file exists, so this session's own
+            // recording is never a candidate. By mtime, which is what makes
+            // it safe to run while another instance has a session open --
+            // that instance's flushes keep its file inside the window.
+            _ = rec.sweep(dir, opts.record_retain_days, @divFloor(rec.wallNs(), std.time.ns_per_s));
+            app.rec = rec.Writer.open(alloc, dir, .{
+                .cols = @intCast(@min(size.cols, std.math.maxInt(u16))),
+                .rows = @intCast(@min(size.rows, std.math.maxInt(u16))),
+                .record_input = opts.record_input,
+            }) catch |err| blk: {
+                // A session that cannot be recorded is still a session.
+                std.debug.print("terminator: not recording this session: {t}\n", .{err});
+                break :blk rec.Writer.disabled(alloc);
+            };
+        }
+    }
 
     app.wake_event = c.SDL_RegisterEvents(1);
     _ = c.SDL_StartTextInput(renderer.window);
@@ -162,7 +231,13 @@ pub fn main(init: std.process.Init.Minimal) !void {
         reader.join();
     };
 
-    var title_buf: [256:0]u8 = undefined;
+    // The composed title -- the child's, plus the recording indicator --
+    // and the last one actually handed to the window. Compared as bytes
+    // rather than by length: the indicator can change while the child's
+    // title does not, and a child can change its title without changing its
+    // length, which the old length-only check missed.
+    var title_buf: [512:0]u8 = undefined;
+    var last_title: [512]u8 = undefined;
     var last_title_len: usize = std.math.maxInt(usize);
     var font_size = opts.font_size;
 
@@ -172,7 +247,9 @@ pub fn main(init: std.process.Init.Minimal) !void {
     var child_exited = false;
 
     var frame_stats = stats.FrameStats.init(opts.frame_stats);
-    defer frame_stats.reportTotals(app.bytes_read.load(.monotonic));
+    // Runs before the recorder is freed: this defer is registered after the
+    // one that frees it, and defers run in reverse.
+    defer frame_stats.reportTotals(app.bytes_read.load(.monotonic), recordTotals(&app));
 
     while (app.running.load(.acquire)) {
         var ev: c.SDL_Event = undefined;
@@ -193,10 +270,12 @@ pub fn main(init: std.process.Init.Minimal) !void {
                 => resized = true,
                 c.SDL_EVENT_WINDOW_FOCUS_GAINED => {
                     renderer.focused = true;
+                    recordFocus(&app, true);
                     redraw = true;
                 },
                 c.SDL_EVENT_WINDOW_FOCUS_LOST => {
                     renderer.focused = false;
+                    recordFocus(&app, false);
                     redraw = true;
                 },
                 c.SDL_EVENT_WINDOW_EXPOSED => redraw = true,
@@ -224,11 +303,31 @@ pub fn main(init: std.process.Init.Minimal) !void {
             renderer.updateSize();
             const g = renderer.gridSize();
             app.mutex.lock();
-            app.term.resize(g.cols, g.rows) catch {};
+            if (app.term.resize(g.cols, g.rows)) |_| {
+                // Inside the terminal mutex, which is the one nesting rule
+                // documented on `rec_mutex`: that mutex is what orders this
+                // resize against a concurrent `parser.feed`, so it is what
+                // decides where the record belongs in the file. Recorded
+                // only when the resize took, so a failed allocation does not
+                // leave the recording claiming a geometry the screen never
+                // had.
+                app.rec_mutex.lock();
+                app.rec.resize(
+                    @intCast(@min(g.cols, std.math.maxInt(u16))),
+                    @intCast(@min(g.rows, std.math.maxInt(u16))),
+                    stats.nowNs(),
+                );
+                app.rec_mutex.unlock();
+            } else |_| {}
             app.mutex.unlock();
             app.pty.resize(@intCast(g.cols), @intCast(g.rows));
             redraw = true;
         }
+
+        // Read before the terminal mutex is taken, never inside it: the
+        // lock order is terminal then recorder, so a read of the recorder's
+        // state has to happen outside or not at all.
+        const record_state = recordState(&app, opts);
 
         // Anything the terminal wants to tell the child (cursor reports,
         // device attributes) goes back down the PTY here.
@@ -241,13 +340,25 @@ pub fn main(init: std.process.Init.Minimal) !void {
         const dirty = app.term.dirty or redraw;
         app.term.dirty = false;
 
-        if (app.term.title.items.len != last_title_len and
-            app.term.title.items.len < title_buf.len)
+        // The composition is a pure function in cli.zig, tested without a
+        // window. It happens here because it reads `term.title`, which the
+        // reader thread writes; the `setTitle` call that follows from it is
+        // a platform call and happens *after* the mutex is dropped. Sprint 1
+        // took the vblank wait out of this lock and it is not getting a
+        // window-server round trip back.
+        const composed = cli.windowTitle(
+            title_buf[0 .. title_buf.len - 1],
+            app.term.title.items,
+            record_state,
+        );
+        var title_changed = false;
+        if (composed.len != last_title_len or
+            !std.mem.eql(u8, composed, last_title[0..composed.len]))
         {
-            last_title_len = app.term.title.items.len;
-            @memcpy(title_buf[0..last_title_len], app.term.title.items);
-            title_buf[last_title_len] = 0;
-            renderer.setTitle(title_buf[0..last_title_len :0]);
+            @memcpy(last_title[0..composed.len], composed);
+            last_title_len = composed.len;
+            title_buf[composed.len] = 0;
+            title_changed = true;
         }
 
         // Copy the frame out under the lock; draw and present it after. The
@@ -267,6 +378,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
         }
         app.mutex.unlock();
         const lock_ns = stats.nowNs() - t_lock;
+
+        if (title_changed) renderer.setTitle(title_buf[0..last_title_len :0]);
 
         if (draw_frame) {
             var times = renderer.draw();
@@ -301,9 +414,18 @@ pub fn main(init: std.process.Init.Minimal) !void {
         while (stats.nowNs() < deadline and app.pty.waitReadable(20)) {
             const n = app.pty.read(&tail) catch break;
             if (n == 0) break;
+            // Recorded, not just parsed. A replay that stopped at the join
+            // would be missing a program's last output and would diverge
+            // from the screen the user was looking at -- which is exactly
+            // the thing the checksum test is for.
+            app.rec.output(tail[0..n], stats.nowNs());
             app.parser.feed(&app.term, tail[0..n]);
         }
     }
+
+    // Closed here rather than left to `deinit`, so the last flush lands
+    // before `--frame-stats` reports what was written.
+    app.rec.close(.clean);
 
     // A `--shell` that prints and exits never reaches the one-second
     // timer, so the last frame is captured on the way out instead. The
@@ -333,8 +455,15 @@ fn stdout(comptime fmt: []const u8, args: anytype) void {
     }
 }
 
+/// Every byte the terminal sends the child goes through here, which is why
+/// the input record is taken here: one call site, so `Writer.input`'s own
+/// `record_input` check is the only gate and no future caller can miss it.
 fn sendToPty(app: *App, bytes: []const u8) void {
     if (bytes.len == 0) return;
+    app.rec_mutex.lock();
+    app.rec.input(bytes, stats.nowNs());
+    app.rec_mutex.unlock();
+
     app.mutex.lock();
     // Typing snaps the view back to the live screen, like every other
     // terminal: you scroll up to read, then hit a key and you're back.
@@ -394,8 +523,25 @@ fn handleKey(
             c.SDLK_K => {
                 app.mutex.lock();
                 app.term.fullReset();
+                // A reset with no bytes behind it. Without a record, every
+                // session in which this was pressed replays to a different
+                // screen than it showed. Nested inside the terminal mutex
+                // for the same reason `resize` is.
+                app.rec_mutex.lock();
+                app.rec.control(.full_reset, stats.nowNs());
+                app.rec_mutex.unlock();
                 app.mutex.unlock();
                 sendToPty(app, "\x0c"); // Ctrl-L, so the shell redraws its prompt
+            },
+            // Cmd Shift R: start or stop recording keystrokes, now. The
+            // title moves with it in the same frame, which is what makes
+            // the indicator mean something rather than decorate something.
+            //
+            // Both spellings, because SDL3 reports the shifted keycode on
+            // some layouts and the unshifted one on others, and a shortcut
+            // that works on one keyboard is a bug on the other.
+            c.SDLK_R, 'R' => {
+                if (shift) toggleInputRecording(app);
             },
             else => {},
         }
@@ -423,20 +569,65 @@ fn handleWheel(app: *App, wheel: c.SDL_MouseWheelEvent) void {
     if (lines == 0) return;
 
     app.mutex.lock();
-    defer app.mutex.unlock();
+    const on_alt = app.term.on_alt;
+    const app_cursor = app.term.modes.app_cursor;
+    if (!on_alt) app.term.scrollView(lines);
+    app.mutex.unlock();
+    if (!on_alt) return;
 
-    if (app.term.on_alt) {
-        // Full-screen apps have no scrollback of ours to show, so translate
-        // the wheel into arrow keys the way xterm does. That makes less,
-        // man and vim scroll as expected.
-        const key: input.Key = if (lines > 0) .up else .down;
-        const count: usize = @abs(lines);
-        var buf: [32]u8 = undefined;
-        const bytes = input.encode(&buf, key, .{}, app.term.modes.app_cursor) orelse return;
-        for (0..count) |_| app.pty.writeAll(bytes) catch return;
-    } else {
-        app.term.scrollView(lines);
-    }
+    // Full-screen apps have no scrollback of ours to show, so translate the
+    // wheel into arrow keys the way xterm does. That makes less, man and vim
+    // scroll as expected.
+    //
+    // Through `sendToPty` rather than straight at the pty: that was the
+    // second place in this file that wrote to the child, and a second place
+    // is a place the input record would have been missing from. It also
+    // picks up the view snap-back every other keystroke gets -- inert here,
+    // because `scrollView` is a no-op on the alt screen, but the shape is
+    // now the same one everywhere.
+    const key: input.Key = if (lines > 0) .up else .down;
+    const count: usize = @abs(lines);
+    var buf: [32]u8 = undefined;
+    const bytes = input.encode(&buf, key, .{}, app_cursor) orelse return;
+    for (0..count) |_| sendToPty(app, bytes);
+}
+
+/// What the title should say about this session right now.
+fn recordState(app: *App, opts: cli.Options) cli.RecordState {
+    if (opts.incognito) return .incognito;
+    app.rec_mutex.lock();
+    defer app.rec_mutex.unlock();
+    if (!app.rec.recording) return .off;
+    return if (app.rec.record_input) .output_and_input else .output;
+}
+
+fn recordFocus(app: *App, focused: bool) void {
+    app.rec_mutex.lock();
+    defer app.rec_mutex.unlock();
+    app.rec.focus(focused, stats.nowNs());
+}
+
+/// `Cmd ⇧ R`. Does nothing when the session is not being recorded at all:
+/// an incognito window cannot be talked into recording keystrokes by a
+/// keystroke.
+fn toggleInputRecording(app: *App) void {
+    app.rec_mutex.lock();
+    defer app.rec_mutex.unlock();
+    if (!app.rec.recording) return;
+    app.rec.record_input = !app.rec.record_input;
+}
+
+fn recordTotals(app: *App) ?stats.RecordTotals {
+    app.rec_mutex.lock();
+    defer app.rec_mutex.unlock();
+    if (app.rec.stats.records == 0 and app.rec.stats.bytes == 0) return null;
+    return .{
+        .bytes = app.rec.stats.bytes,
+        .records = app.rec.stats.records,
+        .redactions = app.rec.stats.redactions,
+        .flushes = app.rec.stats.flushes,
+        .worst_flush_ns = app.rec.stats.worst_flush_ns,
+    };
 }
 
 /// SDL keycode -> our platform-independent key.

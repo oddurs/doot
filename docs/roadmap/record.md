@@ -79,11 +79,16 @@ settings to add later; they are the shape of L0.
   recording is a per-tab opt-in with a visible indicator.
 - **An incognito tab** records nothing and says so in its title.
 - **The recording indicator** is always visible when a tab is recording
-  input, and visible on hover otherwise.
+  input, and visible on hover otherwise. Until there is any chrome to hang
+  it on, the window title is the surface: `<child title> — ● rec`, and
+  `● rec+input` when keystrokes are being recorded. `Cmd ⇧ R` toggles that
+  at runtime and the title moves with it, which is what makes the indicator
+  mean something rather than decorate something.
 - **Files are 0600** under `~/Library/Application Support/terminator/
-  sessions/`, one per session, rotated and compressed on close,
-  retained per a config key with a default measured in days, not
-  forever.
+  sessions/`, one per session, retained per a config key with a default
+  measured in days, not forever. (L0 does not compress: no compression, no
+  `fsync` and no per-record CRC, because each of them is either a stall on
+  the thread draining the pty or a cost with no reader yet.)
 - **Nothing leaves the machine.** Sharing is the user sending a file
   (L4), after redaction, on purpose.
 - **Deletion is real.** Delete a session and the file is gone; there is
@@ -94,6 +99,17 @@ settings to add later; they are the shape of L0.
 ## The sprints
 
 ### L0 — Record every session (two weeks) — the proof
+
+**Done.** See [the sprint record](completed/sprint-l0-record.md). The pty
+drains at 64.4 MiB/s recorded against 66.0 unrecorded (−2.4%, inside the 5%
+the gate allowed) and the worst mutex hold does not move. It moved *down*:
+reproducing sprint 1's 324 µs, as the gate required rather than trusting it,
+found `SDL_SetWindowTitle` inside the terminal mutex, and taking that one
+call out leaves the worst hold at **10–13 µs**.
+
+The redactor now sits in the pty drain path, so it was measured first: 67
+MiB/s, which would have halved the pty rate on its own. A comptime first-byte
+table and a vectorised two-byte scan take it to 3,289–7,385 MiB/s.
 
 Per session, an append-only file of events: `(t, output, bytes)`,
 `(t, input, bytes)` when enabled, `(t, resize, cols, rows)`,
@@ -118,6 +134,15 @@ incognito tab leaves no file.
 
 *Risk:* low in code, entirely in the privacy defaults — which is why
 they are specified here rather than left to the implementation.
+
+*What it shipped:* `src/rec.zig` (the `.trec` format, writer and reader),
+`src/check.zig` (the grid checksum this page calls the arbiter),
+`src/replay.zig` and `zig build replay`, the `● rec` title indicator,
+`Cmd ⇧ R`, and `--no-record` / `--incognito` / `--record-input` /
+`--record-dir` / `--record-retain-days`. One thing the sprint text did not
+have and needed: a `control` record, because `Cmd K` mutates the terminal
+with no bytes through the parser and every session containing one would
+otherwise fail its own checksum.
 
 ### L1 — Checkpoints and seek (two weeks)
 

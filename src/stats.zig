@@ -145,7 +145,10 @@ pub const FrameStats = struct {
     /// The whole-run figures. Printed once, at exit, so a scripted run
     /// (`--shell` pointing at something that dumps output and quits) leaves
     /// one line that says what happened.
-    pub fn reportTotals(self: *FrameStats, bytes_read: u64) void {
+    ///
+    /// `rec_totals` is null when nothing was recorded, and the recorder's line
+    /// is then not printed at all rather than printed as zeroes.
+    pub fn reportTotals(self: *FrameStats, bytes_read: u64, rec_totals: ?RecordTotals) void {
         if (!self.enabled) return;
         const elapsed = nowNs() - self.started;
         const frames = self.total_frames + self.frames;
@@ -159,7 +162,31 @@ pub const FrameStats = struct {
                 @as(f64, @floatFromInt(self.total_lock_max)) / 1000.0,
             },
         );
+        if (rec_totals) |r| std.debug.print(
+            "frame-stats  record: {d} bytes in {d} records, {d} redactions, {d} flushes, worst flush {d:.0} us\n",
+            .{
+                r.bytes,
+                r.records,
+                r.redactions,
+                r.flushes,
+                @as(f64, @floatFromInt(r.worst_flush_ns)) / 1000.0,
+            },
+        );
     }
+};
+
+/// What the session recorder did, for the totals line.
+///
+/// `worst_flush_ns` is the number this exists for. Every other figure here
+/// says how much was written; that one says whether writing it ever stalled
+/// the thread that drains the pty, which is the question L0's gate asks and
+/// the only one the `lock` column cannot answer.
+pub const RecordTotals = struct {
+    bytes: u64 = 0,
+    records: u64 = 0,
+    redactions: u64 = 0,
+    flushes: u64 = 0,
+    worst_flush_ns: u64 = 0,
 };
 
 fn mibPerSec(bytes: u64, ns: u64) f64 {

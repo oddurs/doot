@@ -218,6 +218,10 @@ minimal set, and the release notes quote it.
 
 ### S6 — The record's privacy (with L0, then per sprint)
 
+**Landed with [L0](completed/sprint-l0-record.md).** Every row below except
+the last three — which are gated on sprints that do not exist yet — has a
+test in `src/rec.zig` or `src/tests.zig`, and they run in CI.
+
 [record.md](record.md) specifies the privacy shape; S6 holds it as
 policy with a test per line, landing with L0 and re-run by every L
 sprint.
@@ -238,8 +242,16 @@ Encryption at rest is deliberately not here: FileVault is the platform's
 answer, and a second key the user must manage is a way to lose the
 record, not protect it. The docs say so.
 
+Two of those tests are worth their reasoning. Input is asserted absent by
+**scanning the whole file** for a typed passphrase and for any type-2 record,
+not by reading a flag back: a flag says what the writer believed, and the
+question is what is on the disk. And retention sweeps by **mtime**, not by the
+header's start time, because mtime is self-protecting — an open session's
+flushes keep it inside the window, so a second instance's startup sweep cannot
+delete a file the first one still has open.
+
 *Done when:* the table's tests run in CI; `SECURITY.md` links the
-record's privacy section.
+record's privacy section. — **done.**
 
 *Risk:* none in code. The risk is a default drifting in a later sprint,
 which is what the tests are for.

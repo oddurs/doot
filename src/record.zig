@@ -18,10 +18,17 @@
 //!
 //! The terminal is not involved: this records the child's output before
 //! anything interprets it.
+//!
+//! `--session out.trec` additionally writes a full L0 session recording --
+//! the timed, framed format `src/rec.zig` defines and `zig build replay`
+//! reads. The `.bin` and `.timing` pair is unchanged by it: the corpora and
+//! their baselines depend on those bytes, and this tool's job for
+//! docs/roadmap/agentic.md's A0 is not being redefined here.
 
 const std = @import("std");
 const Pty = @import("pty.zig").Pty;
 const redact = @import("redact.zig");
+const rec = @import("rec.zig");
 
 /// Wide enough that an agent redrawing a full screen is not reshaped by the
 /// recording, and a common size for a real window.
@@ -99,10 +106,14 @@ pub fn main(init: std.process.Init.Minimal) !void {
     }
     if (argv.len < 4 or sep == null or sep.? + 1 >= argv.len) {
         std.debug.print(
-            \\usage: record <out.bin> -- <command> [args...]
+            \\usage: record [options] <out.bin> -- <command> [args...]
             \\
             \\Records the command's terminal output to <out.bin> and its
             \\timing to <out.bin>.timing.
+            \\
+            \\  --send MS:BYTES   send these bytes this long after the start
+            \\  --stop-after MS   stop recording after this long
+            \\  --session F.trec  also write a replayable session recording
             \\
         , .{});
         std.process.exit(2);
@@ -118,6 +129,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         keys.deinit(gpa);
     }
     var stop_after_ms: u64 = 0;
+    var session_path: ?[]const u8 = null;
     {
         var i: usize = 2;
         while (i < sep.?) : (i += 1) {
@@ -128,6 +140,9 @@ pub fn main(init: std.process.Init.Minimal) !void {
             } else if (std.mem.eql(u8, a, "--stop-after") and i + 1 < sep.?) {
                 i += 1;
                 stop_after_ms = try std.fmt.parseInt(u64, std.mem.span(argv[i]), 10);
+            } else if (std.mem.eql(u8, a, "--session") and i + 1 < sep.?) {
+                i += 1;
+                session_path = std.mem.span(argv[i]);
             } else {
                 // Silently ignoring an option means a recording that runs
                 // to the idle timeout with no keystrokes and no clue why.
@@ -140,6 +155,19 @@ pub fn main(init: std.process.Init.Minimal) !void {
     var pty = try Pty.openCommand(default_cols, default_rows, command);
     defer pty.deinit();
     pty.setNonBlocking();
+
+    // The session recording, when asked for. Its own redaction happens
+    // inside the writer, read by read, so it is scrubbed before it reaches
+    // the disk in the same way the running terminal's is -- not at the end
+    // over a buffer, the way the `.bin` below is.
+    var session = rec.Writer.disabled(gpa);
+    defer session.deinit();
+    if (session_path) |sp| {
+        session = try rec.Writer.openPath(gpa, sp, .{
+            .cols = default_cols,
+            .rows = default_rows,
+        });
+    }
 
     var raw: std.ArrayList(u8) = .empty;
     defer raw.deinit(gpa);
@@ -180,6 +208,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         const now = nowNs();
         if (started == null) started = now;
         last_read = now;
+        session.output(buf[0..n], now);
         try raw.appendSlice(gpa, buf[0..n]);
         // One line per read, because a read boundary is a write boundary:
         // it is what the terminal is actually handed at once.
@@ -188,6 +217,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
         try timing.appendSlice(gpa, text);
         reads += 1;
     }
+
+    session.close(.clean);
 
     // From the first byte to the last, not to whenever the recorder
     // stopped waiting: otherwise a program that dumps a megabyte and then

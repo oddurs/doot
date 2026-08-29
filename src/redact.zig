@@ -48,6 +48,112 @@ const shapes = [_]Shape{
     .{ .prefix = "AIza", .min_run = 30, .what = "google key" },
 };
 
+/// The shapes whose prefix starts with each byte, built at compile time.
+///
+/// Why this exists: L0 of docs/roadmap/record.md scrubs every byte off the
+/// pty on its way into a recording, so this scan is in the drain path of the
+/// running terminal rather than in a capture tool nobody is waiting for.
+/// Trying all fourteen prefixes at every offset -- fourteen
+/// runtime-length `std.mem.eql` calls per byte -- measured **67 MiB/s** on
+/// the `zig build bench` `redact` rows, against a pty that
+/// `bench/dump.sh` drains at about 48 MiB/s. That is a 1.4x margin over the
+/// thing it has to keep up with, which is not a margin.
+///
+/// The shapes have five distinct first bytes, so almost every byte of real
+/// output can be rejected with one array lookup instead of fourteen string
+/// compares. `shapes` stays the single definition; this is derived from it,
+/// and the test below asserts the derivation covers all of it so the two
+/// cannot drift.
+const by_first: [256][]const Shape = blk: {
+    @setEvalBranchQuota(256 * (shapes.len + 4));
+    var table: [256][]const Shape = @splat(&[_]Shape{});
+    for (0..256) |b| {
+        // Order is preserved from `shapes`, which matters: `sk-ant-` has to
+        // be tried before `sk-`, or an Anthropic key is redacted as the
+        // shorter shape and the reader is told the wrong thing about it.
+        var bucket: [shapes.len]Shape = undefined;
+        var n: usize = 0;
+        for (shapes) |s| if (s.prefix[0] == b) {
+            bucket[n] = s;
+            n += 1;
+        };
+        if (n == 0) continue;
+        const final = bucket[0..n].*;
+        table[b] = &final;
+    }
+    break :blk table;
+};
+
+/// The distinct two-byte openings any shape can start with.
+///
+/// Derived from `shapes`, so there is still one definition of what a secret
+/// looks like; the tests below assert the derivation is complete in both
+/// directions. Pairs rather than single bytes because `s` alone is one of
+/// the commonest bytes in English prose and in source code, so a first-byte
+/// filter rejects almost nothing on the `ascii` corpus -- measured, it was
+/// worth only 1.3x. `se`, `sk`, `gh`, `gi`, `xo`, `AK`, `AI` and `Be` are
+/// rare, and rejecting on the pair is what makes this scan cost nothing
+/// next to the pty it sits in front of.
+const Pair = struct { a: u8, b: u8 };
+
+const lead_pairs: []const Pair = blk: {
+    var buf: [shapes.len]Pair = undefined;
+    var n: usize = 0;
+    for (shapes) |s| {
+        // Every shape is at least two bytes long, which the test below
+        // asserts rather than assumes.
+        var seen = false;
+        for (buf[0..n]) |p| {
+            if (p.a == s.prefix[0] and p.b == s.prefix[1]) seen = true;
+        }
+        if (!seen) {
+            buf[n] = .{ .a = s.prefix[0], .b = s.prefix[1] };
+            n += 1;
+        }
+    }
+    const final = buf[0..n].*;
+    break :blk &final;
+};
+
+/// The next offset at or after `from` whose two bytes could open a shape.
+///
+/// Why this is vectorised: the scan runs on the thread that drains the pty,
+/// once over every byte the terminal is handed. The first-byte table below
+/// already cut it from fourteen `std.mem.eql` per byte to one array lookup
+/// -- 67 MiB/s to about 1,000 -- and at that speed it still cost 13% of the
+/// pty rate in the running app, measured with `--frame-stats`, which is more
+/// than L0's gate allows. Thirty-two bytes compared against eight pairs at a
+/// time is the difference between a per-byte cost and one that rounds to
+/// nothing.
+fn nextCandidate(buf: []const u8, from: usize) ?usize {
+    const lanes = 32;
+    const V = @Vector(lanes, u8);
+    const M = @Vector(lanes, bool);
+    const yes: M = @splat(true);
+
+    var i = from;
+    // `+ 1` because the second byte of the last lane's pair has to be in
+    // the buffer too.
+    while (i + lanes + 1 <= buf.len) : (i += lanes) {
+        const cur: V = buf[i..][0..lanes].*;
+        const nxt: V = buf[i + 1 ..][0..lanes].*;
+        var hit: M = @splat(false);
+        inline for (lead_pairs) |p| {
+            const both = @select(bool, cur == @as(V, @splat(p.a)), nxt == @as(V, @splat(p.b)), @as(M, @splat(false)));
+            hit = @select(bool, both, yes, hit);
+        }
+        const mask: std.meta.Int(.unsigned, lanes) = @bitCast(hit);
+        if (mask != 0) return i + @ctz(mask);
+    }
+    while (i + 1 < buf.len) : (i += 1) {
+        for (by_first[buf[i]]) |shape| {
+            if (shape.prefix[1] == buf[i + 1]) return i;
+        }
+    }
+    // A single byte at the end cannot open anything: every shape is longer.
+    return null;
+}
+
 /// Bytes that can appear inside a token. Deliberately narrow: stopping at
 /// the first byte outside this set is what keeps a redaction from eating
 /// the punctuation or escape sequence that follows it.
@@ -67,8 +173,11 @@ pub const Finding = struct {
 pub fn scrub(buf: []u8, first: ?*Finding) usize {
     var found: usize = 0;
     var i: usize = 0;
-    outer: while (i < buf.len) : (i += 1) {
-        for (shapes) |shape| {
+    outer: while (i < buf.len) {
+        // Skip straight to the next byte that could begin a shape. On real
+        // terminal output that steps over almost the whole buffer.
+        i = nextCandidate(buf, i) orelse break;
+        for (by_first[buf[i]]) |shape| {
             if (i + shape.prefix.len > buf.len) continue;
             if (!std.mem.eql(u8, buf[i..][0..shape.prefix.len], shape.prefix)) continue;
 
@@ -95,6 +204,7 @@ pub fn scrub(buf: []u8, first: ?*Finding) usize {
             i = end;
             continue :outer;
         }
+        i += 1;
     }
     return found;
 }
@@ -164,6 +274,90 @@ test "scrubbing an already-scrubbed buffer changes nothing" {
     try testing.expectEqual(@as(usize, 0), scrub(&buf, null));
     try testing.expectEqualSlices(u8, once, &buf);
     try testing.expect(try isClean(testing.allocator, &buf, null));
+}
+
+test "the first-byte table covers every shape and invents none" {
+    // `by_first` is derived from `shapes`, and a derivation that silently
+    // dropped a row would turn a redaction off with nothing to notice it.
+    // The check is set equality in both directions.
+    var seen: usize = 0;
+    for (by_first, 0..) |bucket, b| {
+        for (bucket) |shape| {
+            seen += 1;
+            // Every shape is filed under its own first byte...
+            try testing.expectEqual(@as(u8, @intCast(b)), shape.prefix[0]);
+            // ...and is one of the shapes, not something invented.
+            var known = false;
+            for (shapes) |s| {
+                if (std.mem.eql(u8, s.prefix, shape.prefix)) known = true;
+            }
+            try testing.expect(known);
+        }
+    }
+    try testing.expectEqual(shapes.len, seen);
+
+    // And the reverse: every shape is reachable through the table.
+    for (shapes) |s| {
+        var reachable = false;
+        for (by_first[s.prefix[0]]) |candidate| {
+            if (std.mem.eql(u8, candidate.prefix, s.prefix)) reachable = true;
+        }
+        try testing.expect(reachable);
+    }
+}
+
+test "the lead-pair set covers every shape and nothing else" {
+    // The vectorised skip is only correct if `lead_pairs` contains every
+    // two-byte opening a shape can have. A shape whose pair fell out of
+    // this set would simply never be found, silently.
+    for (shapes) |s| {
+        try testing.expect(s.prefix.len >= 2);
+        var covered = false;
+        for (lead_pairs) |p| {
+            if (p.a == s.prefix[0] and p.b == s.prefix[1]) covered = true;
+        }
+        try testing.expect(covered);
+    }
+    for (lead_pairs) |p| {
+        var used = false;
+        for (by_first[p.a]) |shape| {
+            if (shape.prefix[1] == p.b) used = true;
+        }
+        try testing.expect(used);
+    }
+    // No duplicates: only a waste of a compare, but it says the derivation
+    // is doing what it claims.
+    for (lead_pairs, 0..) |p, i| {
+        for (lead_pairs[i + 1 ..]) |q| {
+            try testing.expect(!(p.a == q.a and p.b == q.b));
+        }
+    }
+}
+
+test "the vector scan finds a secret at every alignment" {
+    // Thirty-two bytes at a time, so a secret that begins in the tail of one
+    // vector, in the scalar remainder, or exactly on a lane boundary must
+    // all be found. Off-by-one here is invisible until it is a leak.
+    const secret = "ghp_ABCDEFGHIJKLMNOPQRSTUV";
+    for (0..96) |pad| {
+        const buf = try testing.allocator.alloc(u8, pad + secret.len + 7);
+        defer testing.allocator.free(buf);
+        @memset(buf, '.');
+        @memcpy(buf[pad..][0..secret.len], secret);
+        try testing.expectEqual(@as(usize, 1), scrub(buf, null));
+        try testing.expect(std.mem.indexOf(u8, buf, "ABCDEFGHIJ") == null);
+        try testing.expect(std.mem.indexOf(u8, buf, "ghp_x") != null);
+    }
+}
+
+test "a longer prefix still wins over the shorter one that contains it" {
+    // `sk-ant-` and `sk-` share a bucket, and the bucket keeps the order
+    // `shapes` declares. Reversing it would report an Anthropic key as a
+    // generic api key -- same redaction, wrong label.
+    var buf = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz".*;
+    var first: Finding = undefined;
+    try testing.expectEqual(@as(usize, 1), scrub(&buf, &first));
+    try testing.expectEqualStrings("anthropic key", first.what);
 }
 
 test "an empty or tiny buffer is not a special case" {
