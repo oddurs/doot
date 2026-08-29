@@ -42,7 +42,7 @@ pub fn build(b: *std.Build) void {
     mod.linkFramework("Foundation", .{});
 
     const exe = b.addExecutable(.{
-        .name = "terminator",
+        .name = "doot",
         .root_module = mod,
     });
     b.installArtifact(exe);

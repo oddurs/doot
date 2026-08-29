@@ -84,7 +84,7 @@ settings to add later; they are the shape of L0.
   `● rec+input` when keystrokes are being recorded. `Cmd ⇧ R` toggles that
   at runtime and the title moves with it, which is what makes the indicator
   mean something rather than decorate something.
-- **Files are 0600** under `~/Library/Application Support/terminator/
+- **Files are 0600** under `~/Library/Application Support/doot/
   sessions/`, one per session, retained per a config key with a default
   measured in days, not forever. (L0 does not compress: no compression, no
   `fsync` and no per-record CRC, because each of them is either a stall on
@@ -202,7 +202,7 @@ Two consumers:
 - **The transcript view** — a tab rendered as its commands: each folded
   to one line (`make · exit 2 · 4.2 s · 2,314 lines`) that expands to
   its output, with diffs rendered as diffs ([X9](experience.md)).
-- **`terminator log`** — the same spans as a query:
+- **`doot log`** — the same spans as a query:
   `--failed --since 1h --host build-box`, output as text or JSON.
 
 *Done when:* an agent session from the A0 corpus renders as a transcript
@@ -217,7 +217,7 @@ must do so gracefully.
 
 Export a session — a time range, or a command span — as a single
 self-contained file, with redaction applied: the secret detector's
-findings replaced, input stripped unless asked. `terminator open file`
+findings replaced, input stripped unless asked. `doot open file`
 plays it back; so does the browser player, which is [M4](compatibility.md)
 promoted from a demo to a reader of the record. An agent's transcript
 becomes something you can send to a colleague at full fidelity — every
@@ -267,6 +267,6 @@ runs the old single-process shape.
 - **Making programs emit structure.** OSC 133 is enough to start; a
   typed-output sequence is a later spec, designed once the transcript
   shows what it needs.
-- **A query language of its own.** `terminator log` takes flags and
+- **A query language of its own.** `doot log` takes flags and
   emits JSON; `jq` is the language.
 - **Recording input by default.** Ever.

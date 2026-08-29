@@ -34,7 +34,7 @@ timer in the real app, below.
 
 ```sh
 zig build -Doptimize=ReleaseFast
-./zig-out/bin/terminator --frame-stats --shell bench/dump.sh
+./zig-out/bin/doot --frame-stats --shell bench/dump.sh
 ```
 
 `--frame-stats` prints one line a second to stderr, and a totals line at exit:

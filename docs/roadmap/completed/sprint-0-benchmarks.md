@@ -1,6 +1,6 @@
 # Sprint 0 — Baseline and bench harness
 
-**Done.** Shipped in [#3](https://github.com/oddurs/terminator/pull/3).
+**Done.** Shipped in [#3](https://github.com/oddurs/doot/pull/3).
 
 ## What was proposed
 

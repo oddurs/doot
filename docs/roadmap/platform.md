@@ -35,9 +35,8 @@ developer can run. That is the gap.
   P0 is pulled ahead of D1 and D4 — a second user appears early — the
   interim answer is bundling the two dylibs with `install_name_tool`,
   written so it can be deleted, not made good.
-- **`terminator.app`.** `Info.plist` with a bundle id
-  (`com.oddurs.terminator` — the name is shared with a well-known GNOME
-  terminal, so the id and the cask name have to disambiguate),
+- **`doot.app`.** `Info.plist` with a bundle id
+  (`com.oddurs.doot`),
   high-resolution capable, minimum system version, the document types
   none. A `zig build bundle` step that produces it, used by the release
   workflow.
@@ -73,7 +72,9 @@ Settings visit, no dialog.
 
 - **A DMG** with a drag-to-Applications background, from the release
   workflow.
-- **A Homebrew cask.** The name question from P0 settles here.
+- **A Homebrew cask.** `brew install --cask doot`. The name was settled
+  by [the rename](completed/sprint-n-rename-doot.md); nothing on
+  Homebrew or GitHub collides with it.
 - **Release notes and versioning** are [releases.md](releases.md)'s:
   the changelog section is the release body (V3), and what a minor or
   patch means, and what 1.0 requires, is written there (V2).
@@ -87,7 +88,7 @@ DMG, and the release page carries notes a user can read.
 
 First, the minimal version: on launch, at most once a day, fetch the
 latest release tag from GitHub and, if it is newer, show one line in the
-grid — *terminator 0.4 is available* — with the release page a click
+grid — *doot 0.4 is available* — with the release page a click
 away. No download, no install, no code that runs anything. Off by a
 config key.
 
@@ -104,7 +105,7 @@ config key is documented as such.
 
 ### P4 — Diagnostics (one week)
 
-- **`terminator --doctor`** prints the font found and its path, the SDL
+- **`doot --doctor`** prints the font found and its path, the SDL
   renderer and driver, display scale and refresh rate, `TERM` and
   `TERM_PROGRAM`, the config path and every parse error in it, the
   Unicode and terminfo versions from [C3](correctness.md), and the app

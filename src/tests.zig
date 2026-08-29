@@ -373,7 +373,7 @@ const Recorded = struct {
 };
 
 fn tempDir(buf: []u8, tag: []const u8) []const u8 {
-    return std.fmt.bufPrint(buf, "/tmp/terminator-e2e-{s}-{d}-{d}", .{
+    return std.fmt.bufPrint(buf, "/tmp/doot-e2e-{s}-{d}-{d}", .{
         tag, std.c.getpid(), rec.nowNs() % 1_000_000,
     }) catch unreachable;
 }
@@ -620,7 +620,7 @@ test "S6: a session with no flags records output and never a keystroke" {
 
     // The decision main.zig makes, made the same way: parse the flags, and
     // open a recorder only if they said to.
-    const argv = [_][*:0]const u8{"terminator"};
+    const argv = [_][*:0]const u8{"doot"};
     const opts = cli.parseArgs(&argv).run;
     try testing.expect(opts.record);
     try testing.expect(!opts.record_input);
@@ -672,7 +672,7 @@ test "S6: an incognito session leaves the sessions directory byte-identical" {
     defer testing.allocator.free(before);
     try testing.expect(before.len > 0);
 
-    const argv = [_][*:0]const u8{ "terminator", "--incognito", "--record-dir", "/unused" };
+    const argv = [_][*:0]const u8{ "doot", "--incognito", "--record-dir", "/unused" };
     const opts = cli.parseArgs(&argv).run;
     try testing.expect(!opts.record);
     try testing.expectEqual(cli.RecordState.incognito, opts.recordState());

@@ -194,7 +194,7 @@ pub fn main() !void {
     var sink: u64 = 0;
 
     try out.print(
-        \\terminator benchmarks
+        \\doot benchmarks
         \\
         \\  zig {f} / {s} / {s}-{s}
         \\  Cell = {d} bytes, scrollback = {d} lines

@@ -1,4 +1,4 @@
-# terminator docs
+# doot docs
 
 | | |
 |---|---|

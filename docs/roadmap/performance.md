@@ -76,7 +76,7 @@ The ranking has inverted again. `cjk` was the fastest corpus before Sprint
 4 and did not move, because three-byte codepoints never enter the printable
 run; everything else did. `region` is still last — a partial scroll region
 misses the whole-screen rotation, so vim, less and tmux get per-row copies
-rather than a pointer bump. That is [#12](https://github.com/oddurs/terminator/issues/12),
+rather than a pointer bump. That is [#12](https://github.com/oddurs/doot/issues/12),
 and it is not obvious a region can be rotated without moving the rows
 around it.
 

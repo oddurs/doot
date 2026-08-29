@@ -1,7 +1,7 @@
 # Sprint 3 — Row-level damage tracking
 
 **Retired. Never started.** Closed as not planned:
-[#10](https://github.com/oddurs/terminator/issues/10).
+[#10](https://github.com/oddurs/doot/issues/10).
 
 The second sprint this plan removed from itself, and for the same reason as
 [Sprint 5](sprint-5-cell-size.md): the gate was measured, and it failed.

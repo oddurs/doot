@@ -1,6 +1,6 @@
 # Sprint 4 — Printable-run fast path in the parser
 
-**Done.** Closed [#9](https://github.com/oddurs/terminator/issues/9).
+**Done.** Closed [#9](https://github.com/oddurs/doot/issues/9).
 
 Numbered 4, landed third. It was promoted past Sprint 3 after
 [Sprint 0](sprint-0-benchmarks.md) showed it was the only parse-side win

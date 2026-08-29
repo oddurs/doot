@@ -169,8 +169,8 @@ ReleaseFast, on the maintainer's machine, after the out-of-band reserve below
 landed. This gate cannot run in CI: `--frame-stats` needs a window.
 
 ```
-./zig-out/bin/terminator --frame-stats --no-record            --shell bench/dump.sh
-./zig-out/bin/terminator --frame-stats --record-dir /tmp/rec  --shell bench/dump.sh
+./zig-out/bin/doot --frame-stats --no-record            --shell bench/dump.sh
+./zig-out/bin/doot --frame-stats --record-dir /tmp/rec  --shell bench/dump.sh
 ```
 
 | | pty MiB/s | worst lock hold | worst flush |

@@ -36,7 +36,7 @@ cut one, which is V1.
   `.version` and is threaded through a build option into `--version`,
   `TERM_PROGRAM_VERSION`, `--doctor` ([P4](platform.md)) and the
   bundle's `Info.plist` ([P0](platform.md)). `pty.zig` stops owning it.
-- **`--version`** prints `terminator 0.1.0 (e0a3191)` — the tag and the
+- **`--version`** prints `doot 0.1.0 (e0a3191)` — the tag and the
   commit, so a bug report says which build.
 - **Tag it.** `v0.1.0` on the commit the changelog describes, or the
   changelog's date and link corrected to the commit that gets tagged.
@@ -47,7 +47,7 @@ cut one, which is V1.
   section becomes the release body; `--generate-notes` output goes under
   an "All changes" heading beneath it rather than replacing it.
 
-*Done when:* `gh release list` shows `v0.1.0`, `terminator --version`
+*Done when:* `gh release list` shows `v0.1.0`, `doot --version`
 prints it, and the changelog's links resolve.
 
 *Risk:* none. This is a day of making the repository agree with itself.
@@ -56,7 +56,7 @@ prints it, and the changelog's links resolve.
 `build.zig.zon`'s `.version` is the source of truth, read
 by `build.zig` and handed to `src/version.zig` as a build option along with
 the short commit; `pty.zig` no longer owns a copy. `--version` (and `-V`)
-prints `terminator 0.1.0 (faac302)`. `scripts/changelog-section.sh` extracts
+prints `doot 0.1.0 (faac302)`. `scripts/changelog-section.sh` extracts
 a version's section and fails when there is none, so `release.yml` refuses
 to publish a tag the changelog does not describe and uses the hand-written
 section as the release body, with the generated PR list under an "All

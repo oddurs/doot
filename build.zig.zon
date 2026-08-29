@@ -1,7 +1,7 @@
 .{
-    .name = .terminator,
+    .name = .doot,
     .version = "0.1.0",
-    .fingerprint = 0x8b3d929b2512c018,
+    .fingerprint = 0x6386f11861cce799,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},
     .paths = .{

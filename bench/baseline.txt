@@ -1,4 +1,4 @@
-terminator benchmarks
+doot benchmarks
 
   zig 0.16.0 / ReleaseFast / aarch64-macos
   Cell = 16 bytes, scrollback = 10000 lines

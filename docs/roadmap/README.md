@@ -54,6 +54,7 @@ about the plan. The two retired ones are the most useful of the seven.
 
 | Record | Outcome |
 |---|---|
+| [Sprint N — rename to doot](completed/sprint-n-rename-doot.md) | The name collided with a GNOME terminal. Chosen against Homebrew, GitHub and domains; the bell won. |
 | [Sprint V0 — make 0.1.0 true](completed/sprint-v0-make-010-true.md) | Tagging ran a CI path that had never executed. Two bugs fell out. |
 | [Sprint 0 — benchmarks](completed/sprint-0-benchmarks.md) | Built the harness. Immediately falsified the plan that commissioned it. |
 | [Sprint R — screen row ring](completed/sprint-r-screen-ring.md) | 1.7–3.8×. Was not on the roadmap at all. |
@@ -66,7 +67,7 @@ about the plan. The two retired ones are the most useful of the seven.
 ## Tracking
 
 Open sprints live as GitHub issues under the
-[Performance sprints](https://github.com/oddurs/terminator/milestone/1)
+[Performance sprints](https://github.com/oddurs/doot/milestone/1)
 milestone. The issues carry the current detail; this directory carries the
 reasoning and the history.
 

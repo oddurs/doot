@@ -1,4 +1,4 @@
-# Working on terminator
+# Working on doot
 
 Read by every Claude Code session in this repository. These are not style
 preferences; each one is here because its absence cost something.
@@ -92,7 +92,7 @@ generalised.
 
 ## Operational traps
 
-- **Never run `./zig-out/bin/terminator` bare.** It opens a window and
+- **Never run `./zig-out/bin/doot` bare.** It opens a window and
   blocks forever. Use `--version`, `--help`, or `--shell <script that
   exits>`. `SDL_VIDEODRIVER=dummy` runs it headless.
 - Rebuild before you test a claim about the binary. Running a stale

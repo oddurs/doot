@@ -1,8 +1,8 @@
 # Sprint V0 — Make 0.1.0 true
 
-**Done.** Shipped in [#24](https://github.com/oddurs/terminator/pull/24), with
-[#25](https://github.com/oddurs/terminator/pull/25) and
-[#26](https://github.com/oddurs/terminator/pull/26) fixing what it exposed.
+**Done.** Shipped in [#24](https://github.com/oddurs/doot/pull/24), with
+[#25](https://github.com/oddurs/doot/pull/25) and
+[#26](https://github.com/oddurs/doot/pull/26) fixing what it exposed.
 
 Written late: V0 shipped without a record while every other sprint got one,
 which is its own small lesson about doing the cheap sprint quickly and
@@ -58,7 +58,7 @@ matrix comment in the same file already said.
 recorded the path the file had on the runner:
 
 ```
-40b3347e…  dist/terminator-v0.1.0-aarch64-macos.tar.gz
+40b3347e…  dist/doot-v0.1.0-aarch64-macos.tar.gz
 ```
 
 Both assets land side by side wherever they are downloaded, so
@@ -86,7 +86,7 @@ on the built binary and fails if it disagrees with the tag.
 exited 0 while doing it.** A gate that fails open is worse than no gate.
 Fences are tracked now.
 
-Also: `--version` wrote to **stderr**, so `v=$(terminator --version)` was
+Also: `--version` wrote to **stderr**, so `v=$(doot --version)` was
 empty — the one machine-readable thing the sprint added could not be
 captured. `gitCommit` reported an *enclosing* repository's HEAD, because
 `rev-parse` walks up out of the build root, so a source tarball unpacked
@@ -99,11 +99,11 @@ and CI a step to run them.
 
 ## Done when
 
-> `gh release list` shows `v0.1.0`, `terminator --version` prints it, and
+> `gh release list` shows `v0.1.0`, `doot --version` prints it, and
 > the changelog's links resolve.
 
 All three, verified by downloading the published artifact: it extracts, runs,
-and reports `terminator 0.1.0 (02c68ec)` — the exact tagged commit. Both
+and reports `doot 0.1.0 (02c68ec)` — the exact tagged commit. Both
 changelog links return 200.
 
 ## The lesson for the next V sprint

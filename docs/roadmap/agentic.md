@@ -40,7 +40,7 @@ Both come from the same cause: `csiDispatch` switches on the final byte
 without looking at the private marker, so a keyboard-protocol request
 reaches the arm for an unrelated sequence.
 
-| Sequence | Emitted | What it means | What terminator does |
+| Sequence | Emitted | What it means | What doot does |
 |---|---|---|---|
 | `CSI > 4 m` | 4× per session | xterm modifyOtherKeys | **runs SGR 4 — turns underline on** |
 | `CSI < u` | 4× per session | kitty keyboard pop | **runs restore-cursor — the cursor teleports** |
@@ -48,7 +48,7 @@ reaches the arm for an unrelated sequence.
 
 Every agent CLI that speaks the kitty keyboard protocol turns on underline
 in this terminal on startup, and moves the cursor on exit. Tracked as
-[#28](https://github.com/oddurs/terminator/issues/28); fixing it belongs to
+[#28](https://github.com/oddurs/doot/issues/28); fixing it belongs to
 [A2](#a2--the-modern-tui-protocol-two-weeks), which is where the private
 forms get implemented properly rather than merely stopped from firing.
 
@@ -124,7 +124,7 @@ same seeding and byte-identity rules as the existing six.
 From the recordings, produce two things and put them in this file:
 
 - **The audit table** — every distinct CSI, OSC, DCS and mode each agent
-  emits or queries, with a column for what terminator does today:
+  emits or queries, with a column for what doot does today:
   handled, ignored, mis-handled. This replaces the "where we are" table
   above with a measured one.
 - **The shape of agent output** — bytes per write, writes per second,
@@ -332,7 +332,7 @@ once the attention rail has proved the model.
 
 ### A6 — Remote control (two weeks) — **gated**
 
-A Unix socket in `$TMPDIR`, mode 0600, and a `terminator` CLI that speaks
+A Unix socket in `$TMPDIR`, mode 0600, and a `doot` CLI that speaks
 to it: `open [--cwd DIR] [-- cmd]`, `send TAB TEXT`, `screen TAB`,
 `wait TAB` (returns when the tab reaches a prompt mark), `list`, and —
 because the tab is a log ([record.md](record.md)) — `follow TAB`, which
@@ -409,7 +409,7 @@ Agents run on other machines. OSC 7 carries the hostname; use it.
   editor over `ssh`, via the editor's remote support or an `scp` to a
   temp file, per config.
 - The record ([L3](record.md)) attributes every command to its host, so
-  `terminator log --host build-box` is a real query.
+  `doot log --host build-box` is a real query.
 
 *Done when:* an e2e test through a local `sshd` records the host on
 each mark, and a new tab from a remote session lands on the remote
@@ -436,7 +436,7 @@ started from a tab, not from the CLI, has it.
 ## Not on this plan
 
 - **An assistant in the terminal.** See [priorities.md](priorities.md).
-  terminator hosts agents; it is not one.
+  doot hosts agents; it is not one.
 - **Session persistence, as a multiplexer.** It is on the plan as
   [L5](record.md) — the log outliving the window — which is a
   consequence of the record, not a tmux. Gated on a month of using L0

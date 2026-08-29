@@ -4,7 +4,7 @@
 # Pointed at with `--shell`, this turns the app into an end-to-end benchmark:
 #
 #   zig build -Doptimize=ReleaseFast
-#   ./zig-out/bin/terminator --frame-stats --shell bench/dump.sh
+#   ./zig-out/bin/doot --frame-stats --shell bench/dump.sh
 #
 # The window opens, the corpora stream through the real PTY, parser, grid and
 # renderer, the child exits and so does the app, and stderr carries one line

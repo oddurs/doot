@@ -17,13 +17,13 @@ pub const string: [:0]const u8 = std.fmt.comptimePrint("{s}", .{build_options.ve
 /// The short commit, or empty when this was not built from a checkout.
 pub const commit: [:0]const u8 = std.fmt.comptimePrint("{s}", .{build_options.commit});
 
-/// What `--version` prints: `terminator 0.1.0 (faac302)`. The commit is
+/// What `--version` prints: `doot 0.1.0 (faac302)`. The commit is
 /// what turns "it does this on my machine" into a build someone can check
 /// out, so it is worth the seven characters.
 pub const line: [:0]const u8 = if (commit.len == 0)
-    std.fmt.comptimePrint("terminator {s}", .{string})
+    std.fmt.comptimePrint("doot {s}", .{string})
 else
-    std.fmt.comptimePrint("terminator {s} ({s})", .{ string, commit });
+    std.fmt.comptimePrint("doot {s} ({s})", .{ string, commit });
 
 const testing = std.testing;
 
@@ -31,7 +31,7 @@ test "the version is a semantic version and matches build.zig.zon" {
     const parsed = try std.SemanticVersion.parse(string);
     // Nothing here should ever be zero-length or a placeholder.
     try testing.expect(parsed.major > 0 or parsed.minor > 0 or parsed.patch > 0);
-    try testing.expect(std.mem.startsWith(u8, line, "terminator " ++ string));
+    try testing.expect(std.mem.startsWith(u8, line, "doot " ++ string));
 }
 
 test "a commit, when there is one, is a short hash" {
