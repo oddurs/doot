@@ -37,6 +37,11 @@ thing that decides whether a sprint is done — and opens by building it.
 - [compatibility.md](compatibility.md) — Linux, Windows and the browser,
   what "platform" means on each, and the program matrix. Judged by the
   CI matrix.
+- [record.md](record.md) — the concept under the rest: the terminal is a
+  log and the screen is a view of it. Recording, checkpoints and seek,
+  search over time, the transcript, sessions as files, the window as a
+  client. Judged by materialization — any screen reproduced from the
+  log, bit-identical.
 
 ## Completed and retired
 

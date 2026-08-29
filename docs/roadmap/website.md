@@ -141,6 +141,24 @@ within fifteen minutes of the workflow finishing.
 
 *Risk:* low.
 
+### W5 — The player page (half a week)
+
+`/play/`: the browser player ([M4](compatibility.md)) on a page of its
+own, the one page on the site with a script tag, and the site says so
+on it. Drop an exported session file ([L4](record.md)) onto it and it
+plays; a few of the engineering log's recordings — the 150× before and
+after, an agent session from the corpus — are linked as examples. A
+visitor sees a real session at full fidelity before installing
+anything, and a colleague sent a transcript needs nothing installed to
+read it.
+
+*Why here:* after M4 and L4; it is their public face.
+
+*Done when:* an exported session opens from a link and plays with the
+same grid the app shows; the rest of the site still has no script tag.
+
+*Risk:* low.
+
 ### W4 — Launch (one week) — **gated**
 
 - **The name.** The site's title disambiguates —

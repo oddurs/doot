@@ -71,7 +71,12 @@ From the recordings, produce two things and put them in this file:
 - **The shape of agent output** — bytes per write, writes per second,
   cursor-up-and-redraw cycles per second, longest burst. This is what the
   render path is being asked to do, and it is not what `bench/dump.sh`
-  does.
+  does. It is also [L0](record.md)'s storage estimate: bytes per busy
+  hour is the number the retention default is set from.
+- **Whether agents emit images.** Kitty graphics, sixel, iTerm2 inline
+  images — a browsing agent pasting a screenshot is the case. Today all
+  three are parsed and discarded; the recordings decide whether that
+  moves onto [experience.md](experience.md).
 
 *Why here:* every sprint below claims agents need something. This is where
 the claim gets a source. It is also the cheapest sprint on any roadmap and
@@ -263,11 +268,19 @@ once the attention rail has proved the model.
 
 A Unix socket in `$TMPDIR`, mode 0600, and a `terminator` CLI that speaks
 to it: `open [--cwd DIR] [-- cmd]`, `send TAB TEXT`, `screen TAB`,
-`wait TAB` (returns when the tab reaches a prompt mark), `list`. The
-shape kitty's remote control and iTerm2's API settled on, reduced to what
-an agent driving a terminal actually does: start a subtask in a fresh tab,
-read what it printed, wait for it to finish. `--headless` runs the same
-server with no window, so a TUI can be tested by a script.
+`wait TAB` (returns when the tab reaches a prompt mark), `list`, and —
+because the tab is a log ([record.md](record.md)) — `follow TAB`, which
+streams the record from a point in time, and `log TAB` with L3's query
+flags. The shape kitty's remote control and iTerm2's API settled on,
+reduced to what an agent driving a terminal actually does: start a
+subtask in a fresh tab, read what it printed, wait for it to finish.
+`--headless` runs the same server with no window, so a TUI can be
+tested by a script.
+
+The design principle is *programs as peers*: a human's window and an
+agent's socket are two readers of the same record and two writers to
+the same input path, under the same policy ([S4](security.md)). The
+terminal coordinates agents without being one.
 
 *Gate:* start this only when there is a concrete script that wants it —
 the maintainer's or a user's. It is cheap to defer and, once shipped, an
@@ -285,6 +298,60 @@ machine cannot connect.
 
 *Risk:* medium. The API surface is the risk, not the code.
 
+### A7 — The supervisor view and the approval inbox (three weeks)
+
+Attention is the scarce resource. In the teletype era the machine
+waited for the human; now the human is the bottleneck and several
+machines wait. A5's tab strip shows state; A7 is the view built for
+that state.
+
+- **Cards, not tabs.** Every session as a card: running / at a prompt /
+  exited with status, *since when*, the last few lines it printed, and
+  — from [L3](record.md) — what files its last command touched. Sorted
+  by need: a prompt waited on longest first.
+- **The question, in the notification.** When an agent stops at a
+  prompt, [A1](agentic.md)'s notification carries the screen region
+  after the prompt mark — the actual question — and a `y`/`n`/reply
+  field. The answer goes down the PTY without switching context.
+- **Ranking.** Interruptions ranked by what is needed × how long it has
+  waited × whether the window is focused. A bell from a focused tab is
+  a flash; a prompt in an unfocused tab after two minutes is a
+  notification; the same after ten minutes bounces the dock.
+- **Broadcast.** Type into *N* selected sessions at once, with the
+  paste guard ([S1](security.md)) applied to each.
+
+*Why here:* after A3 gives a session a state and L3 gives it a history.
+A card with neither is a tab.
+
+*Done when:* five recorded agent sessions replayed at once produce the
+right card order at every second, asserted from the recordings; a `y`
+typed into a notification reaches the right PTY and no other.
+
+*Risk:* medium. The ranking is a taste call with a measurement behind
+it — the recordings say how long real prompts wait — and it must never
+be so clever that a user cannot predict it.
+
+### A8 — Host awareness (one week)
+
+Agents run on other machines. OSC 7 carries the hostname; use it.
+
+- Tabs tinted by host, from a hash of the name, stable across sessions.
+- `Cmd T` opens the new tab **on the same host**, in the same directory,
+  over the same `ssh` — by re-running the session's original command
+  with the cwd from the mark.
+- A clicked path on a remote host ([A4](agentic.md)) opens in the local
+  editor over `ssh`, via the editor's remote support or an `scp` to a
+  temp file, per config.
+- The record ([L3](record.md)) attributes every command to its host, so
+  `terminator log --host build-box` is a real query.
+
+*Done when:* an e2e test through a local `sshd` records the host on
+each mark, and a new tab from a remote session lands on the remote
+prompt.
+
+*Risk:* low. The `ssh` re-run needs the original command; a session
+started from a tab, not from the CLI, has it.
+
 ## Why this order
 
 - **A0 first.** Every other sprint on this page is a guess about agents
@@ -297,16 +364,19 @@ machine cannot connect.
 - **A5 late**, because its value is the state A1 and A3 give a tab to show.
   A tab strip with nothing on it is a tab strip.
 - **A6 gated.** An API nobody has asked for is an API nobody has tested.
+- **A7 after A3 and L3**, because its cards are made of their state.
+- **A8 is a week** and can go anywhere after A3.
 
 ## Not on this plan
 
 - **An assistant in the terminal.** See [priorities.md](priorities.md).
   terminator hosts agents; it is not one.
-- **Session persistence.** Surviving a terminal restart means a daemon
-  that owns the PTYs, which is a multiplexer. Out of scope until someone
-  proves tmux is not the answer.
+- **Session persistence, as a multiplexer.** It is on the plan as
+  [L5](record.md) — the log outliving the window — which is a
+  consequence of the record, not a tmux. Gated on a month of using L0
+  and L1.
 - **Inline images** (sixel, kitty graphics). Parsed and discarded today;
-  the agents in the recordings will say whether that should change. If it
-  does, it belongs on [experience.md](experience.md).
+  A0's audit says whether agents emit them. If they do, it belongs on
+  [experience.md](experience.md).
 - **Splits.** After tabs, and only if the attention rail proves that
   seeing two agents at once beats switching between them.

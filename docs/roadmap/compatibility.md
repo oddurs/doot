@@ -160,22 +160,29 @@ Windows user has run it for a week.
 
 *Risk:* high. IMM32 and the ConPTY resize dance are the known traps.
 
-### M4 — The core in a browser (one week) — **gated**
+### M4 — The core in a browser: the player (one week)
 
 `vt`, `grid` and `terminal` compile to `wasm32` today. A 200-line JS
-harness feeds keystrokes in, calls `feed`, and paints the grid to a
-`<canvas>` from an exported cell array. On the website
-([W](website.md)) it is a page of its own — the site's no-script rule
-holds everywhere else — where a visitor types into a real terminator
-core before installing anything.
+harness feeds a session file ([L4](record.md)) in, calls `feed` from
+checkpoint to checkpoint, and paints the grid to a `<canvas>` from an
+exported cell array, with a scrubber. This is **the player**: the
+reader of the record that runs where nothing is installed — a colleague
+opens the exported transcript in a tab. Typing into a live core is the
+same page with a keyboard attached.
+
+On the website ([W5](website.md)) it is a page of its own — the site's
+no-script rule holds everywhere else.
 
 It is also a portability proof with teeth: a `std` feature that does
-not exist on `wasm32-freestanding` fails the build.
+not exist on `wasm32` fails the build.
 
-*Gate:* [W1](website.md) exists, and the maintainer wants a demo.
+*Why here:* no longer gated as a demo; it is L4's second reader and the
+reason sessions-as-files are worth exporting. After L1, whose
+checkpoint format it consumes.
 
-*Done when:* the page runs the `altscreen` corpus and shows the same
-grid the golden test records.
+*Done when:* an exported session plays in the browser with the same
+grid at every checkpoint as the app shows, and the `altscreen` corpus
+matches the golden.
 
 *Risk:* low.
 
@@ -208,7 +215,7 @@ commit.
 - **M2 and M3 gated**, per the priorities, and in that order — Linux is
   a second implementation of seams that exist; Windows also changes the
   PTY.
-- **M4 whenever the site wants it.**
+- **M4 after L1**, as the record's second reader.
 - **M5 as soon as T2 has recordings**; it is a report, not a sprint.
 
 ## Not on this plan

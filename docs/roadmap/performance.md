@@ -21,6 +21,8 @@ changed about this plan.
 | 4 | Printable-run fast path | **Done** — 4.3× on `ascii`, 2–3× on everything else with ASCII in it |
 | 3 | Row-level damage tracking | **Gate failed** — a keystroke costs ~0.4 ms of build; retired |
 | 5 | Shrink the cell to 8 bytes | **Gate failed** — dropped as a speed sprint |
+| 6 | Input-to-present latency, measured and published | Proposed — needs its measurement built first |
+| 7 | The record's write path | Proposed — a watch item for [L0](record.md), not a sprint of its own |
 
 ## What measurement changed
 
@@ -206,6 +208,43 @@ plan. Revisit only if scrollback memory becomes a real complaint.
 
 This is what a gate is for. It cost one afternoon of benchmarking to retire a
 three-week sprint.
+
+### Sprint 6 — Input-to-present latency, measured and published
+
+Throughput is settled; latency has never been measured. The number a
+person feels is keystroke to pixel, and no terminal prints it.
+
+*The measurement first.* Timestamp the key event as it leaves the
+platform layer, carry it through `sendToPty`, the child's echo, the
+parser, the snapshot and `SDL_RenderPresent` (later `gpu_present`), and
+report the interval as a fourth `--frame-stats` column: `latency
+avg/worst`. That is input-to-*present*, honestly labelled — photon
+latency needs a camera, and the docs say which one this is. Idle
+wake-ups per second join it as a fifth column, because the number is
+zero today and must stay zero.
+
+*Gate:* the measurement exists and is stable to within 0.5 ms across
+runs before any change is proposed against it. The history of this
+roadmap says the first surprise will be in where the time actually
+goes, not in the part anyone expected.
+
+*Done when:* the column exists, `bench/baseline.txt` gains a latency
+line from a scripted keystroke run, and [W2](website.md) publishes it
+per release. A regression gate joins [T3](testing.md) once the build
+column can be measured headless.
+
+*Risk:* low. The echo path goes through the child, so the measurement
+includes the shell — say so, and measure with `cat` as the floor.
+
+### Sprint 7 — The record's write path — a watch item
+
+[L0](record.md) appends every PTY read to a file on the reader thread.
+The rule from Sprint 1 applies unchanged: nothing on the reader's path
+may hold the mutex longer, and nothing may slow the drain. L0's own
+done-when is that `lock` does not move and the PTY rate stays within
+5%; this entry exists so that the bench's `--frame-stats` run with
+recording on becomes part of the checklist rather than a thing L0 did
+once.
 
 ## Why this order
 
