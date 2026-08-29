@@ -1,28 +1,79 @@
 # Performance roadmap
 
-Six sprints to make terminator measurably faster, ordered so each one lands on
-ground the previous sprint prepared. Sized for one person at 8–12 focused hours
-a week: roughly twelve weeks.
+Sprints against bottlenecks located in the source and then confirmed — or
+refuted — by measurement. Sized for one person at 8–12 focused hours a week.
 
-The findings below were read out of the source, not guessed. **None of them are
-measured yet** — that is what Sprint 0 is for, and every expected win here is a
-hypothesis with a mechanism behind it rather than a number.
+`zig build bench` is the arbiter. `bench/baseline.txt` is the number to beat.
 
-## What is actually slow
+## Status
 
-| Weight | What | Where | Why it costs |
-|---|---|---|---|
-| Critical | Vsync-blocked present runs inside the mutex | `main.zig:212`, `render.zig:75,242` | The reader thread waits on the lock for up to a full refresh interval every frame, so bulk output drains at roughly 60 batches/sec no matter how large the read buffer is. |
-| Critical | One colour-mod state change per glyph | `render.zig:271-272` | `SDL_SetTextureColorMod` between every `SDL_RenderTexture` splits SDL's batch. A 200×60 window can issue ~24,000 state-changing calls per frame. |
-| High | Every dirty frame repaints the whole grid | `render.zig:203` | Typing one character rebuilds all 24 rows. No damage tracking exists at any granularity. |
-| High | Parser dispatches one byte at a time | `vt.zig:56` | `for (bytes) \|b\| self.advance(...)` — a 64 KiB read becomes 65,536 double-switch dispatches with no fast path for printable runs. |
-| High | Per-character wrap and width work | `terminal.zig:178` | `charWidth`, the pending-wrap check and the column bound are recomputed for every character printed. |
-| Medium | `Cell` is 16 bytes | `grid.zig:43` | 187 KiB for a 200×60 screen; ~30 MB for 10,000 scrollback lines at 200 columns. |
-| Minor | `cellColors` recomputed during run detection | `render.zig:209-221` | Roughly twice per cell, then again in the glyph pass. A rounding error next to the two criticals. |
+| | Sprint | State |
+|---|---|---|
+| 0 | Baseline and bench harness | **Done** |
+| R | Screen row ring | **Done** — 1.7–3.8×, and it was not on the original plan |
+| 1 | Get the vsync wait out of the lock | Next |
+| 2 | One draw call for the glyphs | Ready |
+| 4 | Printable-run fast path | Promoted — now the top parse-side candidate |
+| 3 | Row-level damage tracking | Rescoped — saves draw calls, not grid reads |
+| 5 | Shrink the cell to 8 bytes | **Gate failed** — dropped as a speed sprint |
+
+## What measurement changed
+
+The original plan was written by reading the source. Three of its
+assumptions did not survive contact with the benchmark, which is the entire
+reason Sprint 0 came first.
+
+**The biggest win was not on the plan.** Parse throughput tracked newline
+density almost exactly (r = 0.99), not escape density. `Screen.scrollUp`
+memmoved `(rows-1) × cols` cells per line feed — ~28 KiB per 47 bytes of
+input at 80×24 — and the same corpus against a screen 8.3× taller ran 5×
+slower. The scrollback had always been a ring; the screen was not. Making it
+one bought 1.7–3.8× across every corpus that contains a newline, and flattened
+the height curve from 0.20× to 1.00×. Nothing in the original seven findings
+pointed at it.
+
+**The full-grid scan is free.** A flat ~0.70 ns/cell from 30 KiB to 625 KiB —
+not memory-bandwidth-bound at any realistic size. A 200×60 repaint reads the
+whole grid in 8.5 µs, which is 0.05% of a 60 Hz frame. So damage tracking
+saves *draw-call submission*, not grid reads, and its value is entirely
+downstream of Sprint 2.
+
+**Sprint 5's gate failed.** It was gated on scans being bandwidth-bound. They
+are not. Shrinking `Cell` from 16 to 8 bytes would still halve the scrollback
+footprint (~30 MB → ~15 MB at 10,000 lines), but that is a memory argument,
+not a speed one, and it does not justify the widest-blast-radius refactor on
+the plan. It is no longer a sprint.
+
+**Sprint 4 was revalidated, and promoted.** Once scrolling stopped dominating,
+the newline correlation collapsed from r = 0.99 to r = 0.62 — and `cjk`
+(32 bytes per line) now outruns `ascii` (47 bytes per line), an inversion that
+is impossible if scrolling still governs. What separates them is bytes per
+`print()` call: CJK is three bytes per codepoint, ASCII is one. Per-character
+print cost is now the parse bottleneck, which is exactly what Sprint 4
+targets — it went from an assumption to a measured conclusion.
+
+## Where the time goes now
+
+From `bench/baseline.txt`:
+
+| corpus | MiB/s | what it is |
+|---|---|---|
+| cjk | 178.9 | wide and multibyte text |
+| sgr | 171.0 | colourised build log |
+| altscreen | 129.1 | full-screen app redraw |
+| ascii | 109.2 | plain source dump |
+| scroll | 96.5 | short lines, scrolls every line |
+| region | 72.6 | DECSTBM region + status line |
+
+`region` is now the slowest corpus. A partial scroll region misses the
+whole-screen rotation, so vim, less and tmux — all of which set one — get
+per-row copies rather than a pointer bump. Worth a look after Sprint 4;
+it is not obvious that a region can be rotated without moving the rows
+around it.
 
 ## The sprints
 
-### Sprint 0 — Baseline and bench harness (weeks 1–2)
+### Sprint 0 — Baseline and bench harness — **done**
 
 Add `zig build bench`: a headless harness that feeds recorded byte streams
 through `Parser` and `Terminal` and reports throughput. Corpora are committed
@@ -31,10 +82,11 @@ files, not generated at run time.
 *Why here:* every sprint below claims a win, and without a baseline none of them
 can be defended — nor can Sprint 5 be justified as worth starting.
 
-*Done when:* `zig build bench` prints a table, the numbers are committed as
-`bench/baseline.txt`, and CI posts them on every PR.
+Six committed corpora, headless (the parse stack imports nothing but `std`),
+always ReleaseFast. CI posts the numbers on every PR, non-gating — a shared
+runner is far too noisy to decide a regression.
 
-*Risk:* low. The one trap is a harness that measures itself.
+It paid for itself immediately: see "What measurement changed" above.
 
 ### Sprint 1 — Get the vsync wait out of the lock (weeks 3–4)
 
@@ -95,33 +147,49 @@ and a test proves a run split across two `feed()` calls behaves identically.
 *Risk:* low to medium. The run must break correctly at the wrap point, the
 scroll-region edge and the last column.
 
-### Sprint 5 — Shrink the cell to 8 bytes (weeks 11–13, gated)
+### Sprint 5 — Shrink the cell to 8 bytes — **gate failed, dropped**
 
 Replace the two inline colour unions with a `u16` index into an interned style
 table, leaving `cp:u21 + wide:u2 + style:u16` in 8 bytes.
 
 *Why last:* widest blast radius on the plan and the least certain payoff.
 
-*Gate:* **only start this if Sprint 0's numbers still show scans are
-bandwidth-bound once Sprints 1–3 have landed.** If damage tracking means the
-full grid is rarely scanned, most of the win evaporates and this should be
-dropped rather than done.
+*Gate result:* **failed.** The gate was "only start this if scans are
+bandwidth-bound". They are not — a flat ~0.70 ns/cell from 30 KiB to 625 KiB.
+The remaining case is footprint (~30 MB → ~15 MB of scrollback at 10,000 lines
+× 200 columns), which does not justify the widest-blast-radius refactor on the
+plan. Revisit only if scrollback memory becomes a real complaint.
 
-*Risk:* high. The style table needs an eviction story or it grows without bound
-on RGB-heavy output.
+This is what a gate is for. It cost one afternoon of benchmarking to retire a
+three-week sprint.
 
 ## Why this order
 
+Revised after Sprint 0. The order is now **1 → 2 → 4 → 3**, with 5 dropped.
+
 - **0 → everything.** Measurement first, or every sprint after it is a guess
-  dressed as a result. It is also the only sprint that can *retire* work.
-- **1 → 2, 3.** The lock entangles parse and render timing. Until the vsync wait
-  is outside it, the bench cannot attribute a win to either side.
-- **2 → 3.** Damage tracking must produce whatever the submission path consumes.
-  Build the vertex path first and damage tracking extends it; build it second
-  and the damage logic gets rewritten.
-- **4 is loose.** It depends on nothing but Sprint 0, and is the natural thing to
-  swap forward if Sprint 3's correctness work runs long — which at this cadence
-  is the likeliest way the plan slips.
+  dressed as a result. It is also the only sprint that can *retire* work, and
+  it retired one immediately.
+- **1 → 2, 3.** Unchanged, and the bench cannot settle it: the vsync wait sits
+  inside the mutex, and no headless harness can see that. It needs a frame
+  timer in the real app, which is part of the sprint.
+- **2 → 3.** Strengthened. The grid scan turned out to be free, so damage
+  tracking saves nothing *except* draw-call submission — which means it has no
+  measurable value at all until Sprint 2 defines what gets submitted. Doing 3
+  first would now be close to pointless, not merely wasteful.
+- **4 moved ahead of 3.** It is self-contained, it is the only remaining
+  parse-side win, and it is now backed by evidence rather than assumption.
+  Sprint 3 is the riskiest work on the plan and the least certain payoff;
+  Sprint 4 is neither.
+- **5 is gone.** Its gate failed. See above.
+
+## Adding a sprint
+
+Anything proposed here needs a corpus and a number, not an argument. Add a
+generator to `bench/gen_corpus.py`, regenerate (the per-corpus seeding keeps
+existing corpora byte-identical), and show the before-and-after. The screen
+ring exists because a benchmark contradicted a plausible-sounding plan; the
+next one may too.
 
 ## Not on this plan
 
