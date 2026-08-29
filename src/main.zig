@@ -113,10 +113,15 @@ pub fn main(init: std.process.Init.Minimal) !void {
         alloc,
         "terminator",
         opts.font_size,
-        default_cols,
-        default_rows,
+        opts.cols,
+        opts.rows,
     );
     defer renderer.deinit();
+    if (opts.screenshot) |path| {
+        // A second in, so the shell has had time to draw something.
+        renderer.screenshot_path = path;
+        renderer.screenshot_after_ns = stats.nowNs() + 1_000_000_000;
+    }
 
     const size = renderer.gridSize();
 
@@ -396,6 +401,9 @@ const Options = struct {
     font_size: u32 = default_font_size,
     shell: ?[:0]const u8 = null,
     frame_stats: bool = false,
+    screenshot: ?[:0]const u8 = null,
+    cols: u32 = default_cols,
+    rows: u32 = default_rows,
 };
 
 fn parseArgs(argv: []const [*:0]const u8) Options {
@@ -415,11 +423,24 @@ fn parseArgs(argv: []const [*:0]const u8) Options {
             opts.shell = std.mem.span(argv[i]);
         } else if (std.mem.eql(u8, arg, "--frame-stats")) {
             opts.frame_stats = true;
+        } else if (std.mem.eql(u8, arg, "--screenshot")) {
+            i += 1;
+            if (i >= argv.len) break;
+            opts.screenshot = std.mem.span(argv[i]);
+        } else if (std.mem.eql(u8, arg, "--size")) {
+            i += 1;
+            if (i >= argv.len) break;
+            const spec = std.mem.span(argv[i]);
+            if (std.mem.indexOfScalar(u8, spec, 'x')) |x| {
+                opts.cols = std.fmt.parseInt(u32, spec[0..x], 10) catch default_cols;
+                opts.rows = std.fmt.parseInt(u32, spec[x + 1 ..], 10) catch default_rows;
+            }
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             std.debug.print(
                 \\terminator -- a terminal emulator
                 \\
                 \\  --font-size N   point size (default {d})
+                \\  --size CxR      initial grid, e.g. 200x60 (default {d}x{d})
                 \\  --shell PATH    shell to run (default $SHELL)
                 \\  --frame-stats   print frame timing to stderr once a second
                 \\  -h, --help      this message
@@ -430,7 +451,7 @@ fn parseArgs(argv: []const [*:0]const u8) Options {
                 \\  Cmd K           clear
                 \\  Wheel           scroll history
                 \\
-            , .{default_font_size});
+            , .{ default_font_size, default_cols, default_rows });
             std.process.exit(0);
         }
     }

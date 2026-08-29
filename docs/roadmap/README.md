@@ -3,7 +3,7 @@
 ## Live plans
 
 - [performance.md](performance.md) — the performance sprints. Six planned,
-  three done, one retired by measurement, three open.
+  four done, one retired by measurement, two open (one of them gated).
 
 Feature gaps (selection, reflow, ligatures, mouse reporting) are tracked in
 the README's "Not done yet" list rather than here; they need design more than
@@ -12,13 +12,14 @@ they need sequencing.
 ## Completed and retired
 
 Each record says what was proposed, what was measured, and what it changed
-about the plan. The retired one is the most useful of the four.
+about the plan. The retired one is the most useful of the five.
 
 | Record | Outcome |
 |---|---|
 | [Sprint 0 — benchmarks](completed/sprint-0-benchmarks.md) | Built the harness. Immediately falsified the plan that commissioned it. |
 | [Sprint R — screen row ring](completed/sprint-r-screen-ring.md) | 1.7–3.8×. Was not on the roadmap at all. |
 | [Sprint 1 — vsync out of the lock](completed/sprint-1-vsync-lock.md) | ~150× on bulk output. Brought the frame timer the bench could not. |
+| [Sprint 2 — one draw call](completed/sprint-2-one-draw-call.md) | 2 calls per frame; worst-case build ~40× better. Premise was partly wrong. |
 | [Sprint 5 — shrink the cell](completed/sprint-5-cell-size.md) | **Retired.** Gate failed; three weeks of work never started. |
 
 ## Tracking

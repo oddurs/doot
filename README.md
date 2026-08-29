@@ -33,8 +33,9 @@ assert on the resulting screen.
 | `Cmd K` | clear |
 | wheel | scroll history, or arrow keys on the alternate screen |
 
-Flags: `--font-size N`, `--shell PATH`, `--frame-stats` (frame timing to
-stderr, once a second).
+Flags: `--font-size N`, `--size COLSxROWS`, `--shell PATH`, `--frame-stats`
+(frame timing to stderr, once a second), `--screenshot PATH` (save the frame
+drawn one second in, as a BMP).
 
 ## How it fits together
 
@@ -51,7 +52,7 @@ PTY ──► vt.Parser ──► Terminal ──► Renderer ──► SDL3 ─
 | `terminal.zig` | The semantics: cursor, scroll regions, erase, SGR, alternate screen. No I/O. |
 | `pty.zig` | `forkpty`, window-size signalling, non-blocking reads. |
 | `font.zig` | FreeType faces and the shelf-packed glyph atlas. |
-| `render.zig` | Two passes per row: background runs, then glyphs. |
+| `render.zig` | Snapshot under the lock, then one vertex buffer and one draw call for the frame. |
 | `input.zig` | Keys to bytes. Application cursor mode, xterm modifier params, the lot. |
 | `theme.zig` | 16 ANSI colors plus the generated xterm cube and grayscale ramp. |
 | `main.zig` | Reader thread, event loop, the mutex between them. |

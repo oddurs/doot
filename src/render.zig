@@ -1,9 +1,11 @@
 //! Drawing the grid.
 //!
-//! Two passes per row: fill background runs, then draw glyphs. Splitting them
-//! means every background is a batch of solid rects and every glyph comes from
-//! one texture, which is what keeps a full repaint down to a handful of draw
-//! calls no matter how busy the screen is.
+//! Two passes: background runs, then glyphs. Every quad -- backgrounds, glyph
+//! bitmaps, underlines, the cursor -- goes into one vertex buffer with its
+//! colour on the vertices, sampling one atlas texture, and the whole frame is
+//! submitted with a single `SDL_RenderGeometryRaw`. Solid fills sample a
+//! white texel reserved in the atlas, which is what keeps them in the same
+//! call as the glyphs.
 //!
 //! A frame is drawn in two steps that run under different locking rules.
 //! `snapshot` copies the visible cells out of the terminal and must be called
@@ -34,8 +36,6 @@ pub const Error = error{
 /// Padding between the window edge and the first cell, in logical pixels.
 const pad = 6;
 
-const atlas_bytes = font.atlas_size * font.atlas_size * 4;
-
 /// What one frame draws: a copy of the visible cells plus where the cursor
 /// is, owned by the renderer. Taken under the terminal lock and drawn after
 /// it is released, so it must not alias terminal state -- every field here
@@ -54,6 +54,21 @@ pub const Frame = struct {
     }
 };
 
+/// One corner of a quad, laid out so a single array feeds all three of
+/// `SDL_RenderGeometryRaw`'s attribute pointers at one stride.
+const Vertex = extern struct {
+    x: f32,
+    y: f32,
+    color: c.SDL_FColor,
+    u: f32,
+    v: f32,
+};
+
+/// Texture coordinate of the centre of the atlas's reserved white texel.
+/// Solid fills sample it, which is what lets backgrounds, underlines and the
+/// cursor share the glyph draw call instead of breaking it up.
+const white_uv: f32 = 0.5 / @as(f32, font.atlas_size);
+
 pub const Renderer = struct {
     window: *c.SDL_Window,
     sdl: *c.SDL_Renderer,
@@ -62,6 +77,16 @@ pub const Renderer = struct {
     atlas: font.Atlas,
     theme: theme.Theme,
     frame: Frame = .{},
+    /// The frame's geometry, rebuilt every draw and submitted in one call.
+    verts: std.ArrayList(Vertex) = .empty,
+    indices: std.ArrayList(i32) = .empty,
+    /// Submission calls made by the frame being built, for `--frame-stats`.
+    calls: u64 = 0,
+    /// `--screenshot`: save the first frame drawn after this instant, then
+    /// forget the path. Read back before present, so no OS permission is
+    /// needed to check what the renderer actually produced.
+    screenshot_path: ?[:0]const u8 = null,
+    screenshot_after_ns: u64 = 0,
 
     /// Backing-store pixels per logical pixel (2.0 on a Retina display).
     scale: f32,
@@ -123,6 +148,9 @@ pub const Renderer = struct {
         // Glyphs are tiny; nearest sampling keeps their edges crisp since we
         // always draw them at 1:1 scale anyway.
         _ = c.SDL_SetTextureScaleMode(tex, c.SDL_SCALEMODE_NEAREST);
+        // The atlas starts empty except for its white texel, and the texture
+        // has to carry that from the first frame.
+        _ = c.SDL_UpdateTexture(tex, null, atlas.pixels.ptr, font.atlas_size * 4);
 
         var self = Renderer{
             .window = window,
@@ -141,6 +169,8 @@ pub const Renderer = struct {
     }
 
     pub fn deinit(self: *Renderer) void {
+        self.verts.deinit(self.atlas.alloc);
+        self.indices.deinit(self.atlas.alloc);
         self.atlas.alloc.free(self.frame.cells);
         c.SDL_DestroyTexture(self.atlas_tex);
         self.atlas.deinit();
@@ -182,12 +212,9 @@ pub const Renderer = struct {
         self.font = new_font;
         self.atlas = new_atlas;
 
-        // Clear the texture so stale glyphs can't bleed through the gaps
-        // between newly packed ones.
-        const blank = try self.atlas.alloc.alloc(u8, atlas_bytes);
-        defer self.atlas.alloc.free(blank);
-        @memset(blank, 0);
-        _ = c.SDL_UpdateTexture(self.atlas_tex, null, blank.ptr, font.atlas_size * 4);
+        // Re-upload the (empty) atlas so stale glyphs can't bleed through the
+        // gaps between newly packed ones, and so the white texel survives.
+        _ = c.SDL_UpdateTexture(self.atlas_tex, null, self.atlas.pixels.ptr, font.atlas_size * 4);
     }
 
     pub fn setTitle(self: *Renderer, title: [:0]const u8) void {
@@ -253,10 +280,18 @@ pub const Renderer = struct {
     /// Render the last snapshot and present it. Call with the terminal mutex
     /// released: this is where the frame waits for vblank, and nothing in it
     /// touches the terminal.
+    ///
+    /// The whole frame is one vertex buffer and one draw call. Backgrounds go
+    /// in first, then glyphs, then the cursor: triangles rasterize in index
+    /// order, so later quads blend over earlier ones exactly as separate
+    /// calls would have.
     pub fn draw(self: *Renderer) stats.FrameTimes {
         const t0 = stats.nowNs();
+        self.calls = 1;
         self.setDrawColor(self.theme.bg);
         _ = c.SDL_RenderClear(self.sdl);
+        self.verts.clearRetainingCapacity();
+        self.indices.clearRetainingCapacity();
 
         const cw: f32 = @floatFromInt(self.font.metrics.cell_w);
         const ch: f32 = @floatFromInt(self.font.metrics.cell_h);
@@ -264,33 +299,37 @@ pub const Renderer = struct {
         const oy: f32 = @floatFromInt(self.pad_px);
         const frame = &self.frame;
 
+        // -- pass 1: background runs ---------------------------------------
         for (0..frame.rows) |y| {
             const row = frame.row(y);
             const ry = oy + @as(f32, @floatFromInt(y)) * ch;
-
-            // -- pass 1: background runs -------------------------------
             var x: usize = 0;
+            var bg = self.cellColors(row[0]).bg;
             while (x < row.len) {
-                const colors = self.cellColors(row[x]);
                 var run: usize = 1;
+                var next = bg;
                 while (x + run < row.len) : (run += 1) {
-                    const next = self.cellColors(row[x + run]);
-                    if (!std.meta.eql(next.bg, colors.bg)) break;
+                    next = self.cellColors(row[x + run]).bg;
+                    if (!std.meta.eql(next, bg)) break;
                 }
-                if (!std.meta.eql(colors.bg, self.theme.bg)) {
-                    self.setDrawColor(colors.bg);
-                    var r = c.SDL_FRect{
-                        .x = ox + @as(f32, @floatFromInt(x)) * cw,
-                        .y = ry,
-                        .w = cw * @as(f32, @floatFromInt(run)),
-                        .h = ch,
-                    };
-                    _ = c.SDL_RenderFillRect(self.sdl, &r);
+                if (!std.meta.eql(bg, self.theme.bg)) {
+                    self.rect(
+                        ox + @as(f32, @floatFromInt(x)) * cw,
+                        ry,
+                        cw * @as(f32, @floatFromInt(run)),
+                        ch,
+                        bg,
+                    );
                 }
                 x += run;
+                bg = next;
             }
+        }
 
-            // -- pass 2: glyphs ----------------------------------------
+        // -- pass 2: glyphs ------------------------------------------------
+        for (0..frame.rows) |y| {
+            const row = frame.row(y);
+            const ry = oy + @as(f32, @floatFromInt(y)) * ch;
             for (row, 0..) |cell, cx| {
                 if (cell.wide == .spacer) continue; // drawn by its wide partner
                 if (cell.cp == ' ' or cell.cp == 0) {
@@ -298,17 +337,87 @@ pub const Renderer = struct {
                 }
                 const colors = self.cellColors(cell);
                 const px = ox + @as(f32, @floatFromInt(cx)) * cw;
-                self.drawGlyph(cell, px, ry, colors.fg);
+                self.glyph(cell, px, ry, colors.fg);
             }
         }
 
-        self.drawCursor(ox, oy, cw, ch);
+        self.cursorQuads(ox, oy, cw, ch);
+
+        // -- submit --------------------------------------------------------
+        if (self.verts.items.len > 0) {
+            const v = self.verts.items;
+            const stride = @sizeOf(Vertex);
+            _ = c.SDL_RenderGeometryRaw(
+                self.sdl,
+                self.atlas_tex,
+                &v[0].x,
+                stride,
+                &v[0].color,
+                stride,
+                &v[0].u,
+                stride,
+                @intCast(v.len),
+                self.indices.items.ptr,
+                @intCast(self.indices.items.len),
+                @sizeOf(i32),
+            );
+            self.calls += 1;
+        }
+
         const t1 = stats.nowNs();
+        if (self.screenshot_path) |path| {
+            if (t1 >= self.screenshot_after_ns) {
+                self.screenshot_path = null;
+                if (c.SDL_RenderReadPixels(self.sdl, null)) |surface| {
+                    defer c.SDL_DestroySurface(surface);
+                    _ = c.SDL_SaveBMP(surface, path.ptr);
+                }
+            }
+        }
         _ = c.SDL_RenderPresent(self.sdl);
-        return .{ .build = t1 - t0, .present = stats.nowNs() - t1 };
+        return .{ .build = t1 - t0, .present = stats.nowNs() - t1, .calls = self.calls };
     }
 
-    fn drawGlyph(self: *Renderer, cell: grid.Cell, px: f32, py: f32, fg: grid.Rgb) void {
+    /// Append one textured quad: two triangles over `x0..x1` by `y0..y1`,
+    /// sampling atlas `ua..ub` by `va..vb`, in one flat colour.
+    fn quad(
+        self: *Renderer,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        ua: f32,
+        va: f32,
+        ub: f32,
+        vb: f32,
+        color: c.SDL_FColor,
+    ) void {
+        const alloc = self.atlas.alloc;
+        const base: i32 = @intCast(self.verts.items.len);
+        // An out-of-memory frame is drawn without this quad rather than not
+        // at all; the next frame gets another go.
+        self.verts.appendSlice(alloc, &.{
+            .{ .x = x0, .y = y0, .color = color, .u = ua, .v = va },
+            .{ .x = x1, .y = y0, .color = color, .u = ub, .v = va },
+            .{ .x = x1, .y = y1, .color = color, .u = ub, .v = vb },
+            .{ .x = x0, .y = y1, .color = color, .u = ua, .v = vb },
+        }) catch return;
+        self.indices.appendSlice(alloc, &.{
+            base, base + 1, base + 2,
+            base, base + 2, base + 3,
+        }) catch {
+            self.verts.items.len -= 4;
+        };
+    }
+
+    /// A solid rectangle: a quad over the atlas's white texel.
+    fn rect(self: *Renderer, x: f32, y: f32, w: f32, h: f32, color: grid.Rgb) void {
+        self.quad(x, y, x + w, y + h, white_uv, white_uv, white_uv, white_uv, fcolor(color));
+    }
+
+    /// The glyph for `cell` at cell origin (`px`, `py`), plus its underline
+    /// and strikethrough, in `fg`.
+    fn glyph(self: *Renderer, cell: grid.Cell, px: f32, py: f32, fg: grid.Rgb) void {
         const m = self.font.metrics;
 
         if (cell.cp != ' ' and cell.cp != 0 and !cell.attrs.hidden) {
@@ -319,88 +428,78 @@ pub const Renderer = struct {
                 cell.attrs.italic,
             ) catch return;
 
-            if (found.added) |rect| self.uploadAtlasRegion(rect);
+            if (found.added) |r| self.uploadAtlasRegion(r);
             const g = found.glyph;
             if (g.w > 0 and g.h > 0) {
-                const src = c.SDL_FRect{
-                    .x = @floatFromInt(g.x),
-                    .y = @floatFromInt(g.y),
-                    .w = @floatFromInt(g.w),
-                    .h = @floatFromInt(g.h),
-                };
-                const dst = c.SDL_FRect{
-                    .x = px + @as(f32, @floatFromInt(g.left)),
-                    .y = py + @as(f32, @floatFromInt(m.ascent - g.top)),
-                    .w = @floatFromInt(g.w),
-                    .h = @floatFromInt(g.h),
-                };
-                _ = c.SDL_SetTextureColorMod(self.atlas_tex, fg.r, fg.g, fg.b);
-                _ = c.SDL_RenderTexture(self.sdl, self.atlas_tex, &src, &dst);
+                const x0 = px + @as(f32, @floatFromInt(g.left));
+                const y0 = py + @as(f32, @floatFromInt(m.ascent - g.top));
+                const ua: f32 = @as(f32, @floatFromInt(g.x)) / font.atlas_size;
+                const va: f32 = @as(f32, @floatFromInt(g.y)) / font.atlas_size;
+                const ub: f32 = @as(f32, @floatFromInt(g.x + g.w)) / font.atlas_size;
+                const vb: f32 = @as(f32, @floatFromInt(g.y + g.h)) / font.atlas_size;
+                self.quad(
+                    x0,
+                    y0,
+                    x0 + @as(f32, @floatFromInt(g.w)),
+                    y0 + @as(f32, @floatFromInt(g.h)),
+                    ua,
+                    va,
+                    ub,
+                    vb,
+                    fcolor(fg),
+                );
             }
         }
 
         const cw: f32 = @floatFromInt(m.cell_w);
         const thick: f32 = @floatFromInt(m.underline_thickness);
         if (cell.attrs.underline) {
-            self.setDrawColor(fg);
-            var r = c.SDL_FRect{
-                .x = px,
-                .y = py + @as(f32, @floatFromInt(m.ascent + m.underline_pos)),
-                .w = cw,
-                .h = thick,
-            };
-            _ = c.SDL_RenderFillRect(self.sdl, &r);
+            self.rect(px, py + @as(f32, @floatFromInt(m.ascent + m.underline_pos)), cw, thick, fg);
         }
         if (cell.attrs.strike) {
-            self.setDrawColor(fg);
-            var r = c.SDL_FRect{
-                .x = px,
-                .y = py + @as(f32, @floatFromInt(m.ascent)) * 0.65,
-                .w = cw,
-                .h = thick,
-            };
-            _ = c.SDL_RenderFillRect(self.sdl, &r);
+            self.rect(px, py + @as(f32, @floatFromInt(m.ascent)) * 0.65, cw, thick, fg);
         }
     }
 
-    fn uploadAtlasRegion(self: *Renderer, rect: font.Rect) void {
-        const r = c.SDL_Rect{
-            .x = @intCast(rect.x),
-            .y = @intCast(rect.y),
-            .w = @intCast(rect.w),
-            .h = @intCast(rect.h),
+    fn uploadAtlasRegion(self: *Renderer, r: font.Rect) void {
+        const sdl_rect = c.SDL_Rect{
+            .x = @intCast(r.x),
+            .y = @intCast(r.y),
+            .w = @intCast(r.w),
+            .h = @intCast(r.h),
         };
-        const offset = (@as(usize, rect.y) * font.atlas_size + rect.x) * 4;
+        const offset = (@as(usize, r.y) * font.atlas_size + r.x) * 4;
         _ = c.SDL_UpdateTexture(
             self.atlas_tex,
-            &r,
+            &sdl_rect,
             self.atlas.pixels.ptr + offset,
             font.atlas_size * 4,
         );
     }
 
-    fn drawCursor(self: *Renderer, ox: f32, oy: f32, cw: f32, ch: f32) void {
+    fn cursorQuads(self: *Renderer, ox: f32, oy: f32, cw: f32, ch: f32) void {
         const cursor = self.frame.cursor orelse return;
 
         const px = ox + @as(f32, @floatFromInt(cursor.x)) * cw;
         const py = oy + @as(f32, @floatFromInt(cursor.y)) * ch;
-        var box = c.SDL_FRect{ .x = px, .y = py, .w = cw, .h = ch };
 
         if (!self.focused) {
             // Unfocused windows get a hollow box, so you can tell at a glance
             // which terminal will receive your keystrokes.
-            self.setDrawColor(self.theme.cursor);
-            _ = c.SDL_RenderRect(self.sdl, &box);
+            const t = @max(1, @round(self.scale));
+            self.rect(px, py, cw, t, self.theme.cursor);
+            self.rect(px, py + ch - t, cw, t, self.theme.cursor);
+            self.rect(px, py, t, ch, self.theme.cursor);
+            self.rect(px + cw - t, py, t, ch, self.theme.cursor);
             return;
         }
 
-        self.setDrawColor(self.theme.cursor);
-        _ = c.SDL_RenderFillRect(self.sdl, &box);
+        self.rect(px, py, cw, ch, self.theme.cursor);
 
         // Redraw the covered character in the cursor's contrast color.
         const cell = cursor.cell;
         if (cell.cp != ' ' and cell.cp != 0) {
-            self.drawGlyph(
+            self.glyph(
                 .{ .cp = cell.cp, .attrs = cell.attrs },
                 px,
                 py,
@@ -409,6 +508,15 @@ pub const Renderer = struct {
         }
     }
 };
+
+fn fcolor(rgb: grid.Rgb) c.SDL_FColor {
+    return .{
+        .r = @as(f32, @floatFromInt(rgb.r)) / 255.0,
+        .g = @as(f32, @floatFromInt(rgb.g)) / 255.0,
+        .b = @as(f32, @floatFromInt(rgb.b)) / 255.0,
+        .a = 1.0,
+    };
+}
 
 fn blend(a: grid.Rgb, b: grid.Rgb, t: f32) grid.Rgb {
     const mix = struct {

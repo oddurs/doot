@@ -56,6 +56,9 @@ pub const FrameTimes = struct {
     lock: u64 = 0,
     build: u64 = 0,
     present: u64 = 0,
+    /// SDL submission calls the frame made -- rects, textures, geometry.
+    /// Not a time, but it is the number Sprint 2 exists to change.
+    calls: u64 = 0,
 };
 
 pub const FrameStats = struct {
@@ -69,6 +72,7 @@ pub const FrameStats = struct {
     lock: Interval = .{},
     build: Interval = .{},
     present: Interval = .{},
+    calls: Interval = .{},
 
     total_frames: u64 = 0,
     /// Worst lock hold over the whole run, not just the last window.
@@ -85,6 +89,7 @@ pub const FrameStats = struct {
         self.lock.add(t.lock);
         self.build.add(t.build);
         self.present.add(t.present);
+        self.calls.add(t.calls);
         self.total_lock_max = @max(self.total_lock_max, t.lock);
     }
 
@@ -99,7 +104,7 @@ pub const FrameStats = struct {
 
         const n = self.frames;
         std.debug.print(
-            "frame-stats  {d:>4} fps  lock {d:>7.0}/{d:<7.0}  build {d:>6.0}/{d:<6.0}  present {d:>7.0}/{d:<7.0} us  pty {d:>7.2} MiB/s\n",
+            "frame-stats  {d:>4} fps  lock {d:>7.0}/{d:<7.0}  build {d:>6.0}/{d:<6.0}  present {d:>7.0}/{d:<7.0} us  calls {d:>5}/{d:<5}  pty {d:>7.2} MiB/s\n",
             .{
                 n * 1_000_000_000 / elapsed,
                 self.lock.avgUs(n),
@@ -108,6 +113,8 @@ pub const FrameStats = struct {
                 self.build.maxUs(),
                 self.present.avgUs(n),
                 self.present.maxUs(),
+                self.calls.sum / n,
+                self.calls.max,
                 mibPerSec(bytes_read - self.window_bytes_start, elapsed),
             },
         );
@@ -117,6 +124,7 @@ pub const FrameStats = struct {
         self.lock = .{};
         self.build = .{};
         self.present = .{};
+        self.calls = .{};
         self.window_start = now;
         self.window_bytes_start = bytes_read;
     }
