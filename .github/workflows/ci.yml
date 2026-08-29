@@ -78,13 +78,19 @@ jobs:
 
       - name: Run benchmarks
         # No SDL and no window: vt, grid and terminal import nothing but std.
+        #
+        # Written to the log as well as the job summary. The summary is what
+        # a reviewer reads in the browser; the log is what `gh run view --log`
+        # can grep, which is the only way to get at these from a terminal.
         run: |
+          zig build bench | tee bench-result.txt
           {
             echo "### Benchmarks"
             echo
             echo "Shared runner, so these are indicative only -- not a baseline."
+            echo "\`bench/baseline.txt\`, captured on a quiet machine, is the number to beat."
             echo
             echo '```'
-            zig build bench
+            cat bench-result.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
