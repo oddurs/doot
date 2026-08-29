@@ -67,10 +67,32 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      # The gate: a tag the changelog does not describe does not ship. The
+      # hand-written section is the release body, because notes generated
+      # from PR titles are a list of commits rather than a description of
+      # what changed -- they belong underneath it, not instead of it.
+      - name: Compose the release body
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          scripts/changelog-section.sh "$tag" > body.md
+          {
+            printf '\n## All changes\n\n'
+            gh api --method POST \
+              "repos/${{ github.repository }}/releases/generate-notes" \
+              -f tag_name="$tag" --jq .body
+          } >> body.md
+          cat body.md
 
       - name: Create release
         env:
@@ -80,6 +102,6 @@ jobs:
           gh release create "$tag" \
             --repo "${{ github.repository }}" \
             --title "$tag" \
-            --generate-notes \
+            --notes-file body.md \
             --verify-tag \
             dist/*

@@ -138,9 +138,10 @@ Five roadmaps run beside the order rather than in it, each with one
 sprint that should happen early because it is short and fences
 everything after it:
 
-- [V0](releases.md), a day, before row 1: the repository currently
-  describes a `0.1.0` that was never tagged. V1 then puts a release
-  train under the first sprint that lands.
+- [V0](releases.md), a day, before row 1: **done** — `v0.1.0` is tagged,
+  the version has one source of truth, and `release.yml` refuses a tag the
+  changelog does not describe. V1 then puts a release train under the
+  first sprint that lands.
 - [S0](security.md), two days, before A2 and C1 add the first new
   replies: the rule that the terminal never sends the child bytes
   derived from the screen, the title or the clipboard, made binding by

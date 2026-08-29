@@ -14,4 +14,5 @@ test {
     _ = @import("font.zig");
     _ = @import("stats.zig");
     _ = @import("cli.zig");
+    _ = @import("version.zig");
 }

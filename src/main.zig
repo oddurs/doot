@@ -19,6 +19,7 @@ const input = @import("input.zig");
 const render = @import("render.zig");
 const stats = @import("stats.zig");
 const cli = @import("cli.zig");
+const version = @import("version.zig");
 const Terminal = @import("terminal.zig").Terminal;
 const Pty = @import("pty.zig").Pty;
 
@@ -106,12 +107,19 @@ pub fn main(init: std.process.Init.Minimal) !void {
     else
         std.heap.smp_allocator;
 
-    const opts = cli.parseArgs(init.args.vector) orelse {
-        std.debug.print(cli.help, .{
-            cli.min_font_size, cli.max_font_size, cli.default_font_size,
-            cli.default_cols,  cli.default_rows,  cli.max_dim,
-        });
-        std.process.exit(0);
+    const opts = switch (cli.parseArgs(init.args.vector)) {
+        .run => |o| o,
+        .help => {
+            std.debug.print(cli.help, .{
+                cli.min_font_size, cli.max_font_size, cli.default_font_size,
+                cli.default_cols,  cli.default_rows,  cli.max_dim,
+            });
+            std.process.exit(0);
+        },
+        .version => {
+            std.debug.print("{s}\n", .{version.line});
+            std.process.exit(0);
+        },
     };
 
     var renderer = try render.Renderer.init(

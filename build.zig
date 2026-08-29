@@ -1,8 +1,18 @@
 const std = @import("std");
+const zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    // One source of truth for the version: `build.zig.zon`'s `.version`,
+    // handed to the code as a build option rather than retyped as a
+    // constant. `--version`, TERM_PROGRAM_VERSION and, later, the bundle's
+    // Info.plist all read this string, so there is nothing to keep in step
+    // with the changelog by hand.
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", zon.version);
+    options.addOption([]const u8, "commit", gitCommit(b));
 
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -10,6 +20,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    mod.addOptions("build_options", options);
 
     // Borrowed plumbing: SDL3 gives us a window, input and a Metal-backed
     // 2D renderer; FreeType rasterizes glyphs. Everything above these two
@@ -40,6 +51,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    unit_mod.addOptions("build_options", options);
     unit_mod.linkSystemLibrary("freetype2", .{});
     const unit_tests = b.addTest(.{ .root_module = unit_mod });
     test_step.dependOn(&b.addRunArtifact(unit_tests).step);
@@ -83,8 +95,24 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    e2e_mod.addOptions("build_options", options);
     e2e_mod.linkSystemLibrary("sdl3", .{});
     e2e_mod.linkSystemLibrary("freetype2", .{});
     const e2e_tests = b.addTest(.{ .root_module = e2e_mod });
     test_step.dependOn(&b.addRunArtifact(e2e_tests).step);
+}
+
+/// The short commit `--version` reports, or empty outside a git checkout.
+///
+/// A release tarball is built from an export with no `.git`, and failing
+/// the build over seven characters would be a poor trade -- `--version`
+/// simply prints the number without them.
+fn gitCommit(b: *std.Build) []const u8 {
+    var code: u8 = undefined;
+    const out = b.runAllowFail(
+        &.{ "git", "-C", b.pathFromRoot("."), "rev-parse", "--short=7", "HEAD" },
+        &code,
+        .ignore,
+    ) catch return "";
+    return std.mem.trim(u8, out, " \t\n\r");
 }
