@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Zig dependencies live in build.zig.zon, which Dependabot does not yet
+  # understand. Actions are what it can keep current here.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ['*']

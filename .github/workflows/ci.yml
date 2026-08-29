@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to a branch supersedes the run already in flight for it.
+# main is exempt: every commit there should have its own recorded result.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  ZIG_VERSION: 0.16.0
+
+jobs:
+  format:
+    name: zig fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Check formatting
+        run: zig fmt --check build.zig src/
+
+  test:
+    name: ${{ matrix.optimize }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS only: the renderer is Metal-backed and the PTY tests fork a
+        # real shell. Both are the point of the project, not incidental.
+        os: [macos-15, macos-14]
+        optimize: [Debug, ReleaseFast]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SDL3 and FreeType
+        run: |
+          brew update --quiet
+          brew install sdl3 freetype pkg-config
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Build
+        run: zig build -Doptimize=${{ matrix.optimize }} --summary all
+
+      - name: Test
+        # The e2e suite drives a real shell on a real PTY. It never opens a
+        # window, so it runs headless on a CI runner unchanged.
+        run: zig build test -Doptimize=${{ matrix.optimize }} --summary all

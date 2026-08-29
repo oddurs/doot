@@ -1,0 +1,34 @@
+name: Feature request
+description: Something the terminal should do and does not
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The README's "Not done yet" list already tracks the known gaps --
+        selection, reflow, ligatures, mouse reporting, combining marks.
+        If yours is one of those, a comment on the existing issue is more
+        useful than a new one.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do that terminator makes hard.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+    validations:
+      required: true
+
+  - type: textarea
+    id: prior-art
+    attributes:
+      label: Prior art
+      description: >
+        How other terminals handle it, or the spec that defines it --
+        xterm's ctlseqs, the VT manuals, a DEC STD. Links are ideal.

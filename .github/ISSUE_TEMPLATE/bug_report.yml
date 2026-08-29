@@ -1,0 +1,60 @@
+name: Bug report
+description: Something the terminal gets wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Escape-sequence bugs are much easier to fix with a reproduction that
+        is just bytes. If you can boil it down to a `printf`, please do.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: >
+        Ideally a shell command. `printf '\e[3;5H|'` beats a paragraph.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: terminator commit
+      description: >
+        The commit you built from -- `git rev-parse --short HEAD` in your
+        checkout. (There is no `--version` flag yet.)
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: macOS and hardware
+      placeholder: macOS 15.3, M2 Pro
+    validations:
+      required: true
+
+  - type: input
+    id: program
+    attributes:
+      label: Program involved
+      description: The app that produced the output, with its version if relevant.
+      placeholder: nvim 0.10.4, tmux 3.5a, plain zsh
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: >
+        Screenshots help for rendering bugs. For parser bugs, the raw bytes
+        help more -- `| cat -v` or a hexdump.
