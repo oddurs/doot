@@ -132,6 +132,28 @@ window while a command was producing output hung the app until it was
 killed. The drain now runs only when the child has actually exited, and
 under a deadline.
 
+## What the first CI run measured
+
+The gallery's first run on the macOS runner is more useful than a pass:
+
+| | |
+|---|---|
+| every capture's **size** | matches exactly |
+| `colors-14pt-1x` | **identical, 0 pixels** |
+| the nine scenes containing text | differ by 1.1–2.6% of pixels, worst delta 19–97 |
+
+`colors` is the only scene made entirely of background rectangles and no
+glyphs. It matching byte for byte, while every scene with text differs, puts
+a number on something that was previously a caveat: **the whole difference
+between this machine and the runner is glyph rasterization.** Geometry,
+layout, colour, blending and the vertex path are identical across machines.
+
+That is also the argument for [D1](../dependencies.md), owning the
+rasterizer, stated as a measurement rather than a preference: FreeType
+against a system font whose version moves is the only thing standing between
+this gallery and an exact cross-machine reference. When D1 lands, these nine
+should go to zero, and that is a testable prediction rather than a hope.
+
 ## Not gating, deliberately
 
 Like the bench. A visual diff is usually an intended change and the reviewer

@@ -99,5 +99,11 @@ at is worse than no gallery, because it launders a regression into the
 reference.
 
 The references are rendered on a maintainer's Mac. A CI runner whose system
-font differs by a version will show a whole-image delta that is not a
-regression — read the uploaded renders rather than the percentages.
+font differs by a version shows a delta that is not a regression — read the
+uploaded renders rather than the percentages.
+
+How large a delta: on the first CI run every capture's *size* matched, the
+`colors` scene (rectangles, no glyphs) was byte-identical, and the nine
+scenes containing text differed by 1.1–2.6% of pixels. So the cross-machine
+difference is entirely glyph rasterization, and nothing else in the
+renderer. [D1](roadmap/dependencies.md) should take those nine to zero.
