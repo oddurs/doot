@@ -28,7 +28,6 @@ jobs:
         include:
           - os: macos-15
             arch: aarch64
-            target: aarch64-macos
     steps:
       - uses: actions/checkout@v5
         with:
@@ -43,8 +42,25 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
 
+      # Deliberately no -Dtarget. The runner is already the target, and
+      # naming it explicitly stops Zig using the macOS SDK's headers, so
+      # `@cImport` of <util.h> for forkpty fails with "'util.h' not found".
+      # A cross-compile is impossible here anyway -- see the matrix comment.
       - name: Build
-        run: zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.target }}
+        run: zig build -Doptimize=ReleaseFast
+
+      # The artifact must report the tag it was built for. V0 moved the
+      # version to build.zig.zon so that nothing has to be kept in step by
+      # hand; this is the check that says so about the thing users download.
+      - name: Check the binary reports the tag
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          got=$(./zig-out/bin/terminator --version)
+          echo "$got"
+          case "$got" in
+            "terminator ${tag#v}"|"terminator ${tag#v} ("*) ;;
+            *) echo "binary reports '$got', expected version ${tag#v}" >&2; exit 1 ;;
+          esac
 
       - name: Package
         run: |
