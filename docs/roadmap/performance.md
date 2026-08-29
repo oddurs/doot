@@ -19,7 +19,7 @@ changed about this plan.
 | 1 | Get the vsync wait out of the lock | **Done** — ~150× on bulk output, measured end to end |
 | 2 | One draw call for the glyphs | **Done** — 2 calls per frame, worst-case build ~40× better |
 | 4 | Printable-run fast path | **Done** — 4.3× on `ascii`, 2–3× on everything else with ASCII in it |
-| 3 | Row-level damage tracking | Last one open. Rescoped and **gated** — build is ~70 µs at 200×60 |
+| 3 | Row-level damage tracking | **Gate failed** — a keystroke costs ~0.4 ms of build; retired |
 | 5 | Shrink the cell to 8 bytes | **Gate failed** — dropped as a speed sprint |
 
 ## What measurement changed
@@ -143,7 +143,7 @@ premise was partly wrong — SDL3 folds colour-mod into its batch already —
 and the record says so. See
 [the record](completed/sprint-2-one-draw-call.md).
 
-### Sprint 3 — Row-level damage tracking (weeks 7–8)
+### Sprint 3 — Row-level damage tracking — **gate failed, retired**
 
 Per-row dirty flags set by every mutation path — print, erase, scroll, SGR-only
 rewrites, alt-screen switch, cursor movement. `draw()` rebuilds vertices only
@@ -156,6 +156,13 @@ for dirty rows.
 save is the atlas lookup and vertex generation for unchanged rows — tens of
 microseconds. Start this only if `--frame-stats` shows a build time a user
 could notice, or if idle-frame CPU becomes a battery complaint.
+
+*Gate result:* **failed.** Measured on a typing scenario — a full screen of
+text, then one character every 40 ms — a keystroke costs ~0.2 ms of build at
+100×30 and ~0.4 ms at 200×60, cold. Not noticeable, and idle frames already
+cost nothing because the app only draws on events. Against the riskiest
+change on the plan, that is not a trade. See
+[the record](completed/sprint-3-damage-tracking.md) for what would reopen it.
 
 *Done when:* typing one character in an 80×24 window rebuilds one row, not 24.
 
@@ -202,7 +209,9 @@ three-week sprint.
 
 ## Why this order
 
-Revised after Sprint 0. The order is now **1 → 2 → 4 → 3**, with 5 dropped.
+Revised after Sprint 0. The order was **1 → 2 → 4 → 3**, with 5 dropped.
+All of it has now run: 1, 2 and 4 shipped in that order, and 3 was retired
+by its gate at the end. Nothing on this plan is open.
 
 - **0 → everything.** Measurement first, or every sprint after it is a guess
   dressed as a result. It is also the only sprint that can *retire* work, and
@@ -215,7 +224,8 @@ Revised after Sprint 0. The order is now **1 → 2 → 4 → 3**, with 5 dropped
   tracking saves nothing *except* draw-call submission — which means it has no
   measurable value at all until Sprint 2 defines what gets submitted. Doing 3
   first would now be close to pointless, not merely wasteful. Sprint 2 is
-  done, and it left Sprint 3 with a gate: the whole build is ~70 µs.
+  done, and it left Sprint 3 with a gate: the whole build is ~70 µs. The
+  gate was measured and failed; 3 is retired.
 - **4 moved ahead of 3.** It is self-contained, it is the only remaining
   parse-side win, and it is now backed by evidence rather than assumption.
   Sprint 3 is the riskiest work on the plan and the least certain payoff;
@@ -232,8 +242,9 @@ next one may too.
 
 ## Not on this plan
 
-- **Cell-level damage tracking.** Row granularity suits a flat row-major grid,
-  and scrolling invalidates whole rows anyway.
+- **Damage tracking at any granularity.** Row-level was Sprint 3 and its
+  gate failed; cell-level would save even less, and scrolling invalidates
+  whole rows anyway.
 - **A dedicated sprint for `cellColors`.** Fold it into Sprint 2, which rewrites
   that loop regardless.
 - **Parallelising the parser.** One reader thread is not the constraint — the
