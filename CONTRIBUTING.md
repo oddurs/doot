@@ -63,9 +63,16 @@ explain why rather than what. The existing comments are the reference.
 
 ## Good places to start
 
-The README's "Not done yet" list is the roadmap, roughly in order of how much
-people miss them. Selection and copy is the biggest gap. Damage tracking is
-the most self-contained. Combining marks and ligatures are the deepest.
+Two lists, depending on what you enjoy.
+
+For **features**, the README's "Not done yet" list is roughly ordered by how
+much people miss them. Selection and copy is the biggest gap; combining marks
+and ligatures are the deepest.
+
+For **performance**, [ROADMAP.md](ROADMAP.md) sequences six sprints against
+bottlenecks located in the source, and says why they are in that order. Start
+with the numbers from `zig build bench` — a perf PR without a before-and-after
+is hard to review and easy to get wrong.
 
 Before starting something large, open an issue and say what you plan to do —
 it is a small project and it would be a shame to duplicate work.

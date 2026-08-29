@@ -81,8 +81,10 @@ like here — the short version is that escape-sequence changes should cite the
 spec, and a test that fails without your fix is worth more than a paragraph
 explaining it.
 
-The "Not done yet" list above is the roadmap. Selection and copy is the
-biggest gap; damage tracking is the most self-contained place to start.
+The "Not done yet" list above is the feature roadmap — selection and copy is
+the biggest gap. For performance work, [ROADMAP.md](ROADMAP.md) sequences six
+sprints against bottlenecks located in the source, with `zig build bench` as
+the arbiter.
 
 By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md). To
 report a security issue, see [SECURITY.md](SECURITY.md) — please do not open a
