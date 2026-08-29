@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const posix = std.posix;
+const version = @import("version.zig");
 
 const c = @cImport({
     @cInclude("util.h");
@@ -18,8 +19,6 @@ const c = @cImport({
     @cInclude("signal.h");
     @cInclude("fcntl.h");
 });
-
-pub const version = "0.1.0";
 
 pub const Pty = struct {
     master: posix.fd_t,
@@ -60,7 +59,7 @@ pub const Pty = struct {
             // Identify ourselves the way iTerm, Apple Terminal and Ghostty
             // do, so shell config can special-case this terminal.
             _ = c.setenv("TERM_PROGRAM", "terminator", 1);
-            _ = c.setenv("TERM_PROGRAM_VERSION", version, 1);
+            _ = c.setenv("TERM_PROGRAM_VERSION", version.string, 1);
             _ = c.unsetenv("LINES");
             _ = c.unsetenv("COLUMNS");
 

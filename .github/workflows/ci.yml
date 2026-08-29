@@ -30,6 +30,12 @@ jobs:
       - name: Check formatting
         run: zig fmt --check build.zig src/
 
+      # The release gates are shell, so `zig build test` cannot see them.
+      # They decide what ships, so they get their own tests and their own
+      # CI step rather than being trusted because they worked once.
+      - name: Test the release scripts
+        run: ./scripts/test-changelog-section.sh
+
   test:
     name: ${{ matrix.optimize }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

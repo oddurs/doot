@@ -67,10 +67,40 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      # Two gates. A tag that disagrees with build.zig.zon would ship a
+      # v0.2.0 artifact whose binary reports 0.1.0 -- the drift that having
+      # one source of truth exists to remove, and nothing but a human
+      # currently couples the two. A tag the changelog does not describe
+      # does not ship either; the hand-written section is the release body,
+      # because notes generated from PR titles are a list of commits rather
+      # than a description of what changed. They belong underneath it.
+      - name: Compose the release body
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          zon=$(scripts/zon-version.sh)
+          if [ "$zon" != "${tag#v}" ]; then
+            echo "tag $tag does not match build.zig.zon .version $zon" >&2
+            exit 1
+          fi
+          scripts/changelog-section.sh "$tag" > body.md
+          {
+            printf '\n## All changes\n\n'
+            gh api --method POST \
+              "repos/${{ github.repository }}/releases/generate-notes" \
+              -f tag_name="$tag" --jq .body
+          } >> body.md
+          cat body.md
 
       - name: Create release
         env:
@@ -80,6 +110,6 @@ jobs:
           gh release create "$tag" \
             --repo "${{ github.repository }}" \
             --title "$tag" \
-            --generate-notes \
+            --notes-file body.md \
             --verify-tag \
             dist/*

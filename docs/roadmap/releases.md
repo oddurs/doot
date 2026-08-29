@@ -13,23 +13,24 @@ page carries an artifact a fresh Mac can open. Anything less is a draft.
 
 | | Today | Where |
 |---|---|---|
-| Tagged releases | **None.** `git tag` is empty; `gh release list` is empty | — |
-| The changelog | Records a `0.1.0` dated 2026-08-28 and links to `v0.1.0`, **which does not exist** | `CHANGELOG.md` |
-| The version | `"0.1.0"`, a constant in `pty.zig` because that is where `TERM_PROGRAM_VERSION` is set. No `--version` flag | `pty.zig` `version`; `parseArgs` |
-| Release workflow | Runs on a `v*` tag: builds, tars a bare binary, publishes with `--generate-notes` — a second set of notes, generated from PR titles, beside the hand-written changelog | `.github/workflows/release.yml` |
+| Tagged releases | `v0.1.0`, shipped by [V0](#v0--make-010-true-one-day--done) | — |
+| The changelog | Its `0.1.0` section describes the commit that was tagged, and is the release body | `CHANGELOG.md` |
+| The version | `build.zig.zon`'s `.version`, threaded through a build option into `src/version.zig`. `--version` prints it with the commit | `build.zig`; `src/version.zig` |
+| Release workflow | Runs on a `v*` tag: builds, tars a bare binary, and refuses to publish a tag the changelog does not describe | `.github/workflows/release.yml` |
 | Merge style | Squash, one PR per concern, prefixed titles (`perf:`, `docs:`, `ci:`, `bench:`) | `git log` |
 | CI on `main` | `zig fmt`, Debug and ReleaseFast on macOS 14 and 15, bench (non-gating) | `.github/workflows/ci.yml` |
 | Nightly or pre-release | None | — |
 | Milestones | One, for the performance sprints, now closed | GitHub |
 | Support statement | `SECURITY.md` says how to report; nothing says which versions get a fix | `SECURITY.md` |
 
-The bones are right: squash merges with prefixed titles are exactly what
-release notes want, and the workflow fires on a tag. What is missing is
-the tag, one source of truth for the number, and a reason to cut one.
+The bones were right: squash merges with prefixed titles are exactly what
+release notes want, and the workflow fires on a tag. V0 added the tag and
+one source of truth for the number. What is still missing is a *reason* to
+cut one, which is V1.
 
 ## The sprints
 
-### V0 — Make 0.1.0 true (one day)
+### V0 — Make 0.1.0 true (one day) — **done**
 
 - **One source of truth.** The version moves to `build.zig.zon`'s
   `.version` and is threaded through a build option into `--version`,
@@ -50,6 +51,16 @@ the tag, one source of truth for the number, and a reason to cut one.
 prints it, and the changelog's links resolve.
 
 *Risk:* none. This is a day of making the repository agree with itself.
+
+*Result:* done. `build.zig.zon`'s `.version` is the source of truth, read
+by `build.zig` and handed to `src/version.zig` as a build option along with
+the short commit; `pty.zig` no longer owns a copy. `--version` (and `-V`)
+prints `terminator 0.1.0 (faac302)`. `scripts/changelog-section.sh` extracts
+a version's section and fails when there is none, so `release.yml` refuses
+to publish a tag the changelog does not describe and uses the hand-written
+section as the release body, with the generated PR list under an "All
+changes" heading beneath it. The `0.1.0` entry was rewritten to describe the
+commit actually tagged, which by then included the performance work.
 
 ### V1 — The release train (one week)
 

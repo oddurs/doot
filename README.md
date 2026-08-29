@@ -34,8 +34,8 @@ assert on the resulting screen.
 | wheel | scroll history, or arrow keys on the alternate screen |
 
 Flags: `--font-size N` (6–72), `--size COLSxROWS` (up to 1000 each),
-`--shell PATH`, `--frame-stats` (frame timing to stderr, once a second),
-`--screenshot PATH` (save the frame drawn one second in, as a BMP).
+`--shell PATH`, `--version`, `--frame-stats` (frame timing to stderr, once a
+second), `--screenshot PATH` (save the frame drawn one second in, as a BMP).
 
 ## How it fits together
 

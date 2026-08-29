@@ -63,6 +63,7 @@ pub const help =
     \\  --shell PATH    shell to run (default $SHELL)
     \\  --frame-stats   print frame timing to stderr once a second
     \\  --screenshot F  save the frame drawn one second in as a BMP
+    \\  -V, --version   print the version and the commit it was built from
     \\  -h, --help      this message
     \\
     \\Keys:
@@ -73,10 +74,27 @@ pub const help =
     \\
 ;
 
-/// Returns null when `--help` was asked for, so the caller decides how to
-/// exit rather than this file calling `std.process.exit` and taking the
-/// tests with it.
-pub fn parseArgs(argv: []const [*:0]const u8) ?Options {
+/// What the arguments asked for. `--help` and `--version` are returned
+/// rather than acted on, so that this file never calls `std.process.exit`
+/// -- which would take the tests with it.
+pub const Action = union(enum) {
+    run: Options,
+    help,
+    version,
+};
+
+pub fn parseArgs(argv: []const [*:0]const u8) Action {
+    // A first pass, so that these two really do win over everything else.
+    // The main loop below consumes the token after a value-taking flag, so
+    // `--shell --version` would otherwise take "--version" as the shell
+    // path and go on to open a window and try to exec it. Asking a program
+    // what it is should never open a window.
+    if (argv.len > 1) for (argv[1..]) |raw| {
+        const arg = std.mem.span(raw);
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) return .help;
+        if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-V")) return .version;
+    };
+
     var opts = Options{};
     var i: usize = 1; // skip argv[0]
 
@@ -103,11 +121,9 @@ pub fn parseArgs(argv: []const [*:0]const u8) ?Options {
                 opts.cols = size.cols;
                 opts.rows = size.rows;
             }
-        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            return null;
         }
     }
-    return opts;
+    return .{ .run = opts };
 }
 
 // ---------------------------------------------------------------------------
@@ -159,7 +175,7 @@ test "argv is parsed into options" {
         "terminator", "--size",  "200x60", "--font-size", "18", "--frame-stats",
         "--shell",    "/bin/sh",
     };
-    const opts = parseArgs(&argv).?;
+    const opts = parseArgs(&argv).run;
     try testing.expectEqual(@as(u32, 200), opts.cols);
     try testing.expectEqual(@as(u32, 60), opts.rows);
     try testing.expectEqual(@as(u32, 18), opts.font_size);
@@ -170,17 +186,47 @@ test "argv is parsed into options" {
 
 test "a flag missing its value stops rather than reading past the end" {
     const argv = [_][*:0]const u8{ "terminator", "--size" };
-    const opts = parseArgs(&argv).?;
+    const opts = parseArgs(&argv).run;
     try testing.expectEqual(@as(u32, default_cols), opts.cols);
     try testing.expectEqual(@as(u32, default_rows), opts.rows);
 }
 
-test "unknown arguments are ignored and --help declines to return options" {
+test "unknown arguments are ignored" {
     const unknown = [_][*:0]const u8{ "terminator", "--nonsense", "--frame-stats" };
-    try testing.expect(parseArgs(&unknown).?.frame_stats);
+    try testing.expect(parseArgs(&unknown).run.frame_stats);
+}
 
+test "--help and --version are reported rather than acted on" {
+    // Both win over anything else on the line: someone asking what this
+    // is should not have a window opened at them.
     const help_short = [_][*:0]const u8{ "terminator", "-h" };
-    try testing.expectEqual(@as(?Options, null), parseArgs(&help_short));
-    const help_long = [_][*:0]const u8{ "terminator", "--help" };
-    try testing.expectEqual(@as(?Options, null), parseArgs(&help_long));
+    try testing.expectEqual(Action.help, parseArgs(&help_short));
+    const help_long = [_][*:0]const u8{ "terminator", "--help", "--size", "10x10" };
+    try testing.expectEqual(Action.help, parseArgs(&help_long));
+
+    const ver_short = [_][*:0]const u8{ "terminator", "-V" };
+    try testing.expectEqual(Action.version, parseArgs(&ver_short));
+    const ver_long = [_][*:0]const u8{ "terminator", "--version" };
+    try testing.expectEqual(Action.version, parseArgs(&ver_long));
+}
+
+test "--help and --version win even after a flag that takes a value" {
+    // The regression this guards: the main loop consumes the token after
+    // `--shell`, so these used to be swallowed as a shell path or a size,
+    // and the program opened a window and tried to exec `--version`.
+    const shell = [_][*:0]const u8{ "terminator", "--shell", "--version" };
+    try testing.expectEqual(Action.version, parseArgs(&shell));
+    const size = [_][*:0]const u8{ "terminator", "--size", "--help" };
+    try testing.expectEqual(Action.help, parseArgs(&size));
+    const shot = [_][*:0]const u8{ "terminator", "--screenshot", "-h" };
+    try testing.expectEqual(Action.help, parseArgs(&shot));
+    const font = [_][*:0]const u8{ "terminator", "--font-size", "-V" };
+    try testing.expectEqual(Action.version, parseArgs(&font));
+}
+
+test "argv with no arguments at all is a plain run" {
+    const bare = [_][*:0]const u8{"terminator"};
+    try testing.expectEqual(@as(u32, default_cols), parseArgs(&bare).run.cols);
+    const empty: [0][*:0]const u8 = .{};
+    try testing.expectEqual(@as(u32, default_cols), parseArgs(&empty).run.cols);
 }

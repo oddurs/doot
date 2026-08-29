@@ -19,6 +19,7 @@ const input = @import("input.zig");
 const render = @import("render.zig");
 const stats = @import("stats.zig");
 const cli = @import("cli.zig");
+const version = @import("version.zig");
 const Terminal = @import("terminal.zig").Terminal;
 const Pty = @import("pty.zig").Pty;
 
@@ -106,12 +107,19 @@ pub fn main(init: std.process.Init.Minimal) !void {
     else
         std.heap.smp_allocator;
 
-    const opts = cli.parseArgs(init.args.vector) orelse {
-        std.debug.print(cli.help, .{
-            cli.min_font_size, cli.max_font_size, cli.default_font_size,
-            cli.default_cols,  cli.default_rows,  cli.max_dim,
-        });
-        std.process.exit(0);
+    const opts = switch (cli.parseArgs(init.args.vector)) {
+        .run => |o| o,
+        .help => {
+            stdout(cli.help, .{
+                cli.min_font_size, cli.max_font_size, cli.default_font_size,
+                cli.default_cols,  cli.default_rows,  cli.max_dim,
+            });
+            std.process.exit(0);
+        },
+        .version => {
+            stdout("{s}\n", .{version.line});
+            std.process.exit(0);
+        },
     };
 
     var renderer = try render.Renderer.init(
@@ -263,6 +271,21 @@ pub fn main(init: std.process.Init.Minimal) !void {
     }
 
     app.running.store(false, .release);
+}
+
+/// `--help` and `--version` are the program's output, not a diagnostic:
+/// `std.debug.print` goes to stderr, which would hand `v=$(terminator
+/// --version)` an empty string and write a zero-byte file for
+/// `terminator --version > v.txt`. Answers to questions go to stdout.
+fn stdout(comptime fmt: []const u8, args: anytype) void {
+    var buf: [4096]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    var written: usize = 0;
+    while (written < text.len) {
+        const rc = std.c.write(1, text.ptr + written, text.len - written);
+        if (rc <= 0) return;
+        written += @intCast(rc);
+    }
 }
 
 fn sendToPty(app: *App, bytes: []const u8) void {
