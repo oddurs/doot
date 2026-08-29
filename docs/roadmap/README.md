@@ -23,6 +23,11 @@ thing that decides whether a sprint is done — and opens by building it.
 - [dependencies.md](dependencies.md) — own the GPU path, the rasterizer,
   the shaper and the window, until the binary links only libc and the
   system frameworks. Judged by `otool -L` and the gallery.
+- [releases.md](releases.md) — what a version promises, the release
+  train, milestones, notes, support. Judged by the tag.
+- [website.md](website.md) — the marketing site on GitHub Pages, rendered
+  from what the repository already produces. Judged by a fresh visitor
+  and Lighthouse.
 
 ## Completed and retired
 
