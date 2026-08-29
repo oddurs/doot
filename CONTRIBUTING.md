@@ -21,8 +21,16 @@ Day to day:
 ```sh
 zig build run -- --font-size 16   # run it
 zig build test                    # unit + end-to-end
+zig build bench                   # performance, always ReleaseFast
 zig fmt build.zig src/            # before every commit
 ```
+
+`zig build bench` needs neither SDL nor a window — `vt`, `grid` and
+`terminal` import nothing but `std`. The corpora under `bench/corpus/` are
+committed files so a number from today is comparable with one from a year
+ago; regenerate them only to add or deliberately change one, since doing so
+voids every baseline that came before. `bench/baseline.txt` is the number to
+beat.
 
 ## What the code expects of you
 
