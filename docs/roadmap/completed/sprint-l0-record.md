@@ -178,6 +178,19 @@ landed. This gate cannot run in CI: `--frame-stats` needs a window.
 | unrecorded | 67.66 / 67.69 / 67.56 | 11 / 40 / 7 µs | — |
 | recorded | 66.13 / 66.01 / 66.09 | 5 / 5 / 5 µs | 2,108 / 1,900 / 2,760 µs |
 
+A second, independent run of the same gate on a machine that was busy --
+several build and review jobs in flight -- measured 66.01 -> 62.78 MiB/s,
+**-4.9%**: inside the gate, but at its edge rather than comfortably within
+it. The lock column was unchanged there too (6/10/10 us unrecorded,
+5/6/8 us recorded), which is the claim this sprint actually had to meet.
+
+Take the honest reading: recording costs somewhere between 2% and 5% of
+bulk throughput, the spread is machine load rather than anything in the
+recorder, and the number to re-measure against is a range, not the
+friendliest single figure. Run the gate alternating, on a quiet machine,
+and quote what you get.
+
+
 Medians: 67.66 → 66.09 MiB/s, **−2.3%**, inside the 5% the gate allows. The
 worst recorded run against the best unrecorded one is 67.69 → 66.01, −2.5%.
 The lock column does not move; if anything it is quieter recorded, which is
