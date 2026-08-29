@@ -29,10 +29,13 @@ checked out. Check `git branch --show-current` before every commit anyway.
 - Squash merge, delete the branch. The commit body says *why*, and states
   what was measured.
 - A PR closing a sprint issue says `Closes #N`.
-- A change to `.github/workflows/` can only be merged from a branch pushed
-  over SSH — GitHub refuses to let an OAuth app land one without the
-  `workflow` scope. Dependabot's workflow bumps therefore cannot be merged
-  by an agent; supersede them with an equivalent branch.
+- A change to `.github/workflows/` needs the `gh` token to carry the
+  `workflow` scope — a squash merge is a commit that modifies a workflow
+  file, and GitHub refuses that from an OAuth token without it, whatever
+  protocol the branch was pushed over. Check with `gh auth status`; add
+  it once with `gh auth refresh -h github.com -s workflow`. The token on
+  this machine has it as of 2026-08-29, so Dependabot's workflow bumps
+  merge like any other PR.
 
 ## A claim carries a number, or a picture, or it is labelled a guess
 
