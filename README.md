@@ -22,7 +22,9 @@ zig build -Doptimize=ReleaseFast
 
 `zig build test` runs the suite: unit tests for the parser, grid, key encoding
 and atlas, plus end-to-end tests that drive a real shell on a real PTY and
-assert on the resulting screen.
+assert on the resulting screen. `zig build bench` measures the parse path and
+`zig build gallery` renders the screenshot gallery and diffs it — the two
+arbiters that decide whether a change is an improvement.
 
 ## Keys
 
@@ -58,6 +60,7 @@ PTY ──► vt.Parser ──► Terminal ──► Renderer ──► SDL3 ─
 | `main.zig` | Reader thread, event loop, the mutex between them. |
 | `stats.zig` | The `--frame-stats` timer: lock hold, build and present per frame. |
 | `cli.zig` | Command-line options, and the bounds on anything the renderer will size a window from. |
+| `png.zig` | A small PNG encoder and decoder, so screenshots need no image library. |
 
 Two threads: one reads the PTY and feeds the parser, the main thread draws.
 One mutex between them, held by the main thread only long enough to copy the

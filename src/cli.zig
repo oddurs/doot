@@ -22,6 +22,11 @@ pub const default_rows = 30;
 pub const min_font_size = 6;
 pub const max_font_size = 72;
 pub const max_dim = 1000;
+/// `--scale` bounds. 1 and 2 are the real displays; the range exists so a
+/// gallery capture can ask for a density the machine it runs on does not
+/// have, which is the only way 2x captures are reproducible on a CI runner.
+pub const min_scale = 0.5;
+pub const max_scale = 4.0;
 
 pub const Options = struct {
     font_size: u32 = default_font_size,
@@ -30,6 +35,8 @@ pub const Options = struct {
     screenshot: ?[:0]const u8 = null,
     cols: u32 = default_cols,
     rows: u32 = default_rows,
+    /// Pretend the display has this pixel density. Null means ask it.
+    scale: ?f32 = null,
 };
 
 pub const Size = struct { cols: u32, rows: u32 };
@@ -50,6 +57,12 @@ pub fn parseSize(spec: []const u8) ?Size {
     return .{ .cols = clampDim(cols), .rows = clampDim(rows) };
 }
 
+pub fn parseScale(spec: []const u8) ?f32 {
+    const n = std.fmt.parseFloat(f32, spec) catch return null;
+    if (std.math.isNan(n)) return null;
+    return std.math.clamp(n, min_scale, max_scale);
+}
+
 pub fn parseFontSize(spec: []const u8) ?u32 {
     const n = std.fmt.parseInt(u32, spec, 10) catch return null;
     return std.math.clamp(n, min_font_size, max_font_size);
@@ -62,7 +75,8 @@ pub const help =
     \\  --size CxR      initial grid, e.g. 200x60 (default {d}x{d}, max {d})
     \\  --shell PATH    shell to run (default $SHELL)
     \\  --frame-stats   print frame timing to stderr once a second
-    \\  --screenshot F  save the frame drawn one second in as a BMP
+    \\  --scale N       pretend the display has this pixel density (1, 2)
+    \\  --screenshot F  save the frame drawn one second in as a PNG
     \\  -V, --version   print the version and the commit it was built from
     \\  -h, --help      this message
     \\
@@ -114,6 +128,10 @@ pub fn parseArgs(argv: []const [*:0]const u8) Action {
             i += 1;
             if (i >= argv.len) break;
             opts.screenshot = std.mem.span(argv[i]);
+        } else if (std.mem.eql(u8, arg, "--scale")) {
+            i += 1;
+            if (i >= argv.len) break;
+            opts.scale = parseScale(std.mem.span(argv[i])) orelse opts.scale;
         } else if (std.mem.eql(u8, arg, "--size")) {
             i += 1;
             if (i >= argv.len) break;
@@ -168,6 +186,20 @@ test "font size is held to the range the keyboard enforces" {
     try testing.expectEqual(@as(?u32, max_font_size), parseFontSize("100000"));
     try testing.expectEqual(@as(?u32, min_font_size), parseFontSize("1"));
     try testing.expectEqual(@as(?u32, null), parseFontSize("big"));
+}
+
+test "scale is parsed and bounded" {
+    try testing.expectEqual(@as(?f32, 2.0), parseScale("2"));
+    try testing.expectEqual(@as(?f32, 1.5), parseScale("1.5"));
+    try testing.expectEqual(@as(?f32, max_scale), parseScale("99"));
+    try testing.expectEqual(@as(?f32, min_scale), parseScale("0.01"));
+    try testing.expectEqual(@as(?f32, null), parseScale("big"));
+    try testing.expectEqual(@as(?f32, null), parseScale("nan"));
+    // Unset means "ask the display", which is not the same as 1.
+    const bare = [_][*:0]const u8{"terminator"};
+    try testing.expectEqual(@as(?f32, null), parseArgs(&bare).run.scale);
+    const given = [_][*:0]const u8{ "terminator", "--scale", "2" };
+    try testing.expectEqual(@as(?f32, 2.0), parseArgs(&given).run.scale);
 }
 
 test "argv is parsed into options" {

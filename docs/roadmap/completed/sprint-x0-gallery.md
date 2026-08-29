@@ -1,0 +1,108 @@
+# Sprint X0 — The gallery
+
+**Done.** First sprint on the [experience roadmap](../experience.md), and
+row 1 of the [priorities](../priorities.md) order.
+
+## What was proposed
+
+Turn `--screenshot` into an acceptance test: scripts under `bench/gallery/`
+each rendering one canonical screen, captured at 1× and 2×, committed as
+PNGs, with `zig build gallery` re-rendering and reporting per-image pixel
+deltas and CI posting them non-gating.
+
+Risk was called **low** — "the flag exists; this is scripting around it".
+That was wrong in an interesting way, and the two things it missed are the
+sprint.
+
+## What it actually needed
+
+**Rendering with no display.** `--screenshot` existed but nothing had ever
+run the app without a window. `SDL_VIDEODRIVER=dummy` gives SDL a backend
+with no display and `SDL_RenderReadPixels` still returns a correct frame, so
+a capture works on a CI runner. The `offscreen` driver, which sounds like
+the right one, fails to create a window at all.
+
+**A pixel density that does not depend on the machine.** A 2× capture was
+impossible on a 1× runner, because the renderer asked the display how dense
+it was. `--scale N` tells it to pretend instead, and `Renderer.init` now
+sizes the window so its *pixel* size fits the grid at that scale — without
+that, forcing 2× rendered double-size glyphs into a single-size window and
+showed half the columns.
+
+**A PNG codec.** The flag wrote BMP via SDL, and 152 KB of committed
+captures would have been about a megabyte. `src/png.zig` is roughly a
+hundred lines over `std.compress.flate` — 8-bit RGBA, no interlacing, filter
+0, encode and decode. The project links libc and the system's own frameworks
+and nothing else ([dependencies.md](../dependencies.md)); a picture format is
+not a good reason to break that. Its own tests found the first bug: the
+decoder accepted a file with no `IEND` chunk, so a truncated capture came
+back as a shorter picture rather than an error.
+
+## Two bugs found by building it
+
+**The app could lose the tail of a program's output.** The event loop ends
+when `pty.exited()` notices the child is gone, which can happen while bytes
+it already wrote are still in the PTY buffer. Interactively you would never
+see it; a gallery scene that prints and exits in milliseconds hits it every
+time. The exit path now stops the reader, joins it, and drains what is left
+before the final frame.
+
+**`--screenshot` could not capture a short-lived program at all.** It fired
+one second in, and every scene here is gone before that. The last frame is
+now captured on the way out if the timer never fired, which also makes the
+capture deterministic rather than "whatever was on screen at one second".
+
+## The captures
+
+Ten, 152 KB in total:
+
+| scene | what it covers |
+|---|---|
+| `typography` | printable ASCII, descenders, box drawing, blocks, braille, CJK, emoji |
+| `attributes` | every SGR attribute, alone and combined |
+| `colors` | 16 ANSI slots, the 256-colour cube, a truecolour ramp |
+| `tui` | a scroll region, a framed panel, a status line |
+| `cursor` | a scene whose only interesting feature is the cursor |
+
+`typography` at 10, 14 and 20 pt and at 1× and 2×, because baseline
+placement and cell rounding are what change between sizes.
+
+The scenes are scripts printing fixed bytes, **not `vim` and `htop`** as the
+sprint text suggested. Their output varies with version, terminal size,
+locale and the files lying around, and a pixel diff cannot tell that apart
+from a regression — the bench corpora are committed files for exactly this
+reason. Real-program screens want recorded byte streams, which
+[A0](../agentic.md) produces.
+
+## Done when
+
+> the gallery runs headless on the macOS CI runner and a one-pixel change in
+> the cursor shows up as a diff in the PR summary
+
+Both. Headless locally and as a CI job that uploads the renders and writes
+the table to the job summary. The cursor condition was demonstrated by
+breaking it two ways:
+
+| mutation | 1× | 2× | worst delta |
+|---|---|---|---|
+| cursor block one pixel narrower | 17 pixels | 34 pixels | 194 |
+| cursor colour +1 in one channel | 153 pixels | 578 pixels | 1 |
+
+The `worst` column is what separates the two: a few pixels at a large delta
+is a shape moving, many pixels at a delta of 1 is a colour change.
+
+## What the first gallery shows
+
+The typography page has **empty cells** where braille, CJK and emoji should
+be, and the box-drawing row is partial. That is not a regression; it is the
+"missing glyphs are drawn as nothing" row of the experience roadmap's
+where-we-are table, which until now was a sentence. It is [X2](../experience.md)'s
+job, and the gallery is how anyone will be able to tell it worked.
+
+## Not gating, deliberately
+
+Like the bench. A visual diff is usually an intended change and the reviewer
+decides. The references are also rendered on a maintainer's Mac, so a runner
+with a different system font version reads as a whole-image delta that is
+not a regression — the job says so, and uploads the renders so a person can
+look rather than trust a percentage.
