@@ -19,6 +19,20 @@
 //! replay that never drains them would diverge for a reason that says
 //! nothing about the recording).
 //!
+//! Two things E1 added are on opposite sides of that line, and which side
+//! each is on is the whole argument:
+//!
+//! - A row's **`wrapped` flag is hashed.** It is a property of the byte
+//!   stream -- a replay that got wrapping wrong *is* wrong -- and it is the
+//!   only thing that tells two screens with identical cells apart when one
+//!   was reached by wrapping at the margin and the other by a line feed.
+//! - A row's **line id is not**, and neither is the **selection**. An id is a
+//!   property of this terminal's history: two terminals fed the same bytes
+//!   from different starting points hold the same screen with different
+//!   numbers on it. The selection is view state, like `view_offset`. Hashing
+//!   either would manufacture divergences that say nothing about the
+//!   recording -- the exact failure mode this file exists to avoid.
+//!
 //! Both screens are hashed, not just the active one. An alt-screen program
 //! that exits leaves the primary behind it, and a replay that got the
 //! primary wrong while `on_alt` happened to be false would otherwise pass.
@@ -83,13 +97,22 @@ fn cursorv(h: *Hasher, c: @import("terminal.zig").Cursor) void {
     u8v(h, @as(u8, @bitCast(c.attrs)));
 }
 
+/// A row's metadata, minus its identity. See the header: the flags are the
+/// stream's, the id is this terminal's history's.
+fn flagsv(h: *Hasher, m: grid.RowMeta) void {
+    u8v(h, @as(u8, @bitCast(m.flags)));
+}
+
 fn screenv(h: *Hasher, s: *const grid.Screen) void {
     u64v(h, s.cols);
     u64v(h, s.rows);
     // Logical order, one row at a time. `s.cells` is in ring order and
     // hashing it directly would call a rotated screen equal to a correct
     // one -- which is the single most likely way a replay goes wrong.
-    for (0..s.rows) |y| for (s.row(y)) |cell| cellv(h, cell);
+    for (0..s.rows) |y| {
+        flagsv(h, s.rowMeta(y).*);
+        for (s.row(y)) |cell| cellv(h, cell);
+    }
 }
 
 /// A hash of the terminal state a replay has to reproduce.
@@ -115,6 +138,7 @@ pub fn checksum(term: *Terminal) u64 {
     boolv(&h, m.app_keypad);
     boolv(&h, m.bracketed_paste);
     boolv(&h, m.mouse);
+    boolv(&h, m.mouse_sgr);
 
     u64v(&h, term.tabstops.len);
     for (term.tabstops) |t| boolv(&h, t);
@@ -127,6 +151,7 @@ pub fn checksum(term: *Terminal) u64 {
     u64v(&h, term.scrollback.len);
     for (0..term.scrollback.len) |i| {
         const line = term.scrollback.back(i) orelse break;
+        flagsv(&h, term.scrollback.backMeta(i).?);
         for (line) |cell| cellv(&h, cell);
     }
 
@@ -192,6 +217,7 @@ test "every field the checksum claims to cover moves it" {
         .{ .name = "origin mode", .bytes = base ++ "\x1b[?6h" },
         .{ .name = "bracketed paste", .bytes = base ++ "\x1b[?2004h" },
         .{ .name = "mouse reporting", .bytes = base ++ "\x1b[?1000h" },
+        .{ .name = "the mouse encoding", .bytes = base ++ "\x1b[?1006h" },
         .{ .name = "the alt screen", .bytes = base ++ "\x1b[?1049h" },
         .{ .name = "tab stops", .bytes = base ++ "\x1b[3g" },
         .{ .name = "scrollback", .bytes = base ++ "\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n" },
@@ -295,5 +321,59 @@ test "the view offset and the dirty flag are not part of it" {
     t.bell = true;
     try t.replies.appendSlice(testing.allocator, "\x1b[0n");
     try t.title.appendSlice(testing.allocator, "a title");
+    try testing.expectEqual(before, checksum(&t));
+}
+
+// -- E1: the wrap flag is in, the line id and the selection are not --------
+
+test "a wrapped row does not hash the same as two rows" {
+    // The case nothing else in this file can see: identical cells, identical
+    // cursor, identical everything -- and one screen's first row ran off the
+    // right margin while the other's was ended by a line feed. That is a
+    // different document, and a replay that got it backwards would paste
+    // differently and search differently.
+    var a = try Terminal.init(testing.allocator, 4, 3);
+    defer a.deinit();
+    var b = try Terminal.init(testing.allocator, 4, 3);
+    defer b.deinit();
+
+    feed(&a, "abcdefgh"); // wraps at the margin
+    feed(&b, "abcd\r\nefgh"); // two lines that happen to fill their rows
+
+    // The cells really are identical, so the flag is the only difference.
+    for (0..3) |y| {
+        try testing.expectEqualSlices(
+            grid.Cell,
+            a.screen().row(y),
+            b.screen().row(y),
+        );
+    }
+    try testing.expect(a.screen().rowMeta(0).flags.wrapped);
+    try testing.expect(!b.screen().rowMeta(0).flags.wrapped);
+    try testing.expect(checksum(&a) != checksum(&b));
+}
+
+test "line ids and the selection are not part of it" {
+    // The other half of the argument. Two terminals showing the same screen
+    // must hash the same however much history each one has behind it, or
+    // every replay of a long session fails for a reason that says nothing
+    // about the recording -- and a selection is view state, like the view
+    // offset above.
+    var t = try Terminal.init(testing.allocator, 10, 3);
+    defer t.deinit();
+    feed(&t, "one\r\ntwo\r\nthree");
+
+    const before = checksum(&t);
+    t.next_line_id += 5_000;
+    t.setSelection(.{
+        .anchor = .{ .line = t.screen().rowMeta(0).id, .x = 0 },
+        .head = .{ .line = t.screen().rowMeta(1).id, .x = 2 },
+    });
+    try testing.expect(t.selection != null);
+    try testing.expectEqual(before, checksum(&t));
+
+    // And relabelling every row on the screen, without touching a cell,
+    // leaves the checksum where it was.
+    for (0..t.rows) |y| t.screen().rowMeta(y).id += 100_000;
     try testing.expectEqual(before, checksum(&t));
 }

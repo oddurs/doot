@@ -31,6 +31,7 @@ const gpu = @import("gpu.zig");
 const theme = @import("theme.zig");
 const stats = @import("stats.zig");
 const png = @import("png.zig");
+const sel = @import("sel.zig");
 const Terminal = @import("terminal.zig").Terminal;
 
 pub const c = @cImport({
@@ -57,6 +58,15 @@ pub const Frame = struct {
     /// of view, or off the grid. The covered cell is redrawn in the cursor's
     /// contrast colour, so it travels with the position.
     cursor: ?struct { x: usize, y: usize, cell: grid.Cell } = null,
+    /// The selected columns of each row, already **resolved**: one entry per
+    /// row, half-open, `x0 == x1` where nothing is selected.
+    ///
+    /// A resolved span rather than the selection itself, because a selection
+    /// is a pair of line ids and resolving one needs the scrollback -- which
+    /// `draw` cannot touch, since it runs after the terminal mutex has been
+    /// released. Resolving here costs one `contains` test per row, inside a
+    /// lock that is already memcpying twelve thousand cells.
+    sel: []sel.Span = &.{},
 
     fn row(self: *const Frame, y: usize) []const grid.Cell {
         return self.cells[y * self.cols ..][0..self.cols];
@@ -235,6 +245,7 @@ pub const Renderer = struct {
         self.verts.deinit(self.atlas.alloc);
         self.indices.deinit(self.atlas.alloc);
         self.atlas.alloc.free(self.frame.cells);
+        self.atlas.alloc.free(self.frame.sel);
         self.gpu.destroy();
         self.atlas.deinit();
         self.font.deinit();
@@ -300,7 +311,13 @@ pub const Renderer = struct {
     }
 
     /// The effective colors for a cell, after reverse video, dim and bold.
-    fn cellColors(self: *const Renderer, cell: grid.Cell) struct { fg: grid.Rgb, bg: grid.Rgb } {
+    ///
+    /// `selected` suppresses reverse video. A selected cell is drawn on the
+    /// selection colour whatever its own background was, so leaving the swap
+    /// in would paint a reverse-video run -- a `less` status line, a shell's
+    /// highlighted completion -- in the theme's dark background on top of the
+    /// dark selection, and the text would disappear while it was selected.
+    fn cellColors(self: *const Renderer, cell: grid.Cell, selected: bool) struct { fg: grid.Rgb, bg: grid.Rgb } {
         var fg_slot = cell.fg;
         const bg_slot = cell.bg;
 
@@ -314,7 +331,7 @@ pub const Renderer = struct {
 
         var fg = self.theme.resolve(fg_slot, .fg);
         var bg = self.theme.resolve(bg_slot, .bg);
-        if (cell.attrs.reverse) std.mem.swap(grid.Rgb, &fg, &bg);
+        if (cell.attrs.reverse and !selected) std.mem.swap(grid.Rgb, &fg, &bg);
         if (cell.attrs.dim) fg = blend(bg, fg, 0.55);
         if (cell.attrs.hidden) fg = bg;
         return .{ .fg = fg, .bg = bg };
@@ -333,10 +350,23 @@ pub const Renderer = struct {
             self.atlas.alloc.free(self.frame.cells);
             self.frame.cells = cells;
         }
+        if (self.frame.sel.len != rows) {
+            const spans = try self.atlas.alloc.alloc(sel.Span, rows);
+            self.atlas.alloc.free(self.frame.sel);
+            self.frame.sel = spans;
+        }
         self.frame.cols = cols;
         self.frame.rows = rows;
+        // The selection is resolved once, here, and turned into a span per
+        // row. `draw` has no scrollback to resolve a line id against, and by
+        // the time it runs the mutex is gone.
+        const resolved: ?sel.Resolved = if (term.selection) |s| sel.resolve(term, s) else null;
         for (0..rows) |y| {
             @memcpy(self.frame.cells[y * cols ..][0..cols], term.viewRow(y));
+            self.frame.sel[y] = if (resolved) |r|
+                sel.spanFor(r, sel.viewOrd(term, y)) orelse .{}
+            else
+                .{};
         }
 
         self.frame.cursor = null;
@@ -372,42 +402,45 @@ pub const Renderer = struct {
         const frame = &self.frame;
 
         // -- pass 1: background runs ---------------------------------------
+        //
+        // A selected row is drawn in three pieces: the columns before the
+        // selection, the selection itself, and the columns after it. The two
+        // outer pieces batch into runs exactly as an unselected row does; the
+        // selection is **one** rect whatever is under it, so a highlight over
+        // a rainbow costs the same as one over blank space.
         for (0..frame.rows) |y| {
             const row = frame.row(y);
             const ry = oy + @as(f32, @floatFromInt(y)) * ch;
-            var x: usize = 0;
-            var bg = self.cellColors(row[0]).bg;
-            while (x < row.len) {
-                var run: usize = 1;
-                var next = bg;
-                while (x + run < row.len) : (run += 1) {
-                    next = self.cellColors(row[x + run]).bg;
-                    if (!std.meta.eql(next, bg)) break;
-                }
-                if (!std.meta.eql(bg, self.theme.bg)) {
-                    self.rect(
-                        ox + @as(f32, @floatFromInt(x)) * cw,
-                        ry,
-                        cw * @as(f32, @floatFromInt(run)),
-                        ch,
-                        bg,
-                    );
-                }
-                x += run;
-                bg = next;
+            const span = frame.sel[y];
+            if (span.x0 >= span.x1) {
+                self.bgRuns(row, 0, ox, ry, cw, ch);
+                continue;
             }
+            const x0: usize = @min(span.x0, row.len);
+            const x1: usize = @min(span.x1, row.len);
+            self.bgRuns(row[0..x0], 0, ox, ry, cw, ch);
+            self.rect(
+                ox + @as(f32, @floatFromInt(x0)) * cw,
+                ry,
+                cw * @as(f32, @floatFromInt(x1 - x0)),
+                ch,
+                self.theme.selection,
+            );
+            self.bgRuns(row[x1..], x1, ox, ry, cw, ch);
         }
 
         // -- pass 2: glyphs ------------------------------------------------
         for (0..frame.rows) |y| {
             const row = frame.row(y);
             const ry = oy + @as(f32, @floatFromInt(y)) * ch;
+            const span = frame.sel[y];
             for (row, 0..) |cell, cx| {
                 if (cell.wide == .spacer) continue; // drawn by its wide partner
                 if (cell.cp == ' ' or cell.cp == 0) {
                     if (!cell.attrs.underline and !cell.attrs.strike) continue;
                 }
-                const colors = self.cellColors(cell);
+                const selected = cx >= span.x0 and cx < span.x1;
+                const colors = self.cellColors(cell, selected);
                 const px = ox + @as(f32, @floatFromInt(cx)) * cw;
                 self.glyph(cell, px, ry, colors.fg);
             }
@@ -441,6 +474,58 @@ pub const Renderer = struct {
         // to, and the frame already exists in the offscreen texture.
         self.gpu.present() catch {};
         return .{ .build = t1 - t0, .drawable = stats.nowNs() - t1, .calls = self.calls };
+    }
+
+    /// Background runs for one slice of a row, starting at column `x_off`.
+    ///
+    /// Adjacent cells with the same background become one rect, which is what
+    /// keeps a full-width coloured line to a single quad. Cells matching the
+    /// theme's own background draw nothing at all.
+    fn bgRuns(self: *Renderer, cells: []const grid.Cell, x_off: usize, ox: f32, ry: f32, cw: f32, ch: f32) void {
+        if (cells.len == 0) return;
+        var x: usize = 0;
+        var bg = self.cellColors(cells[0], false).bg;
+        while (x < cells.len) {
+            var run: usize = 1;
+            var next = bg;
+            while (x + run < cells.len) : (run += 1) {
+                next = self.cellColors(cells[x + run], false).bg;
+                if (!std.meta.eql(next, bg)) break;
+            }
+            if (!std.meta.eql(bg, self.theme.bg)) {
+                self.rect(
+                    ox + @as(f32, @floatFromInt(x_off + x)) * cw,
+                    ry,
+                    cw * @as(f32, @floatFromInt(run)),
+                    ch,
+                    bg,
+                );
+            }
+            x += run;
+            bg = next;
+        }
+    }
+
+    /// The grid's geometry in device pixels, for `sel.cellAt`. Glue: the
+    /// arithmetic that uses it is in `sel.zig`, where it can be tested
+    /// without a window.
+    pub fn cellMetrics(self: *const Renderer, cols: usize, rows: usize) sel.Metrics {
+        return .{
+            .pad = self.pad_px,
+            .cell_w = self.font.metrics.cell_w,
+            .cell_h = self.font.metrics.cell_h,
+            .cols = cols,
+            .rows = rows,
+        };
+    }
+
+    /// A window-space pointer position in device pixels. SDL reports the
+    /// mouse in logical units; everything above is measured in pixels.
+    pub fn toPixels(self: *const Renderer, x: f32, y: f32) struct { x: i32, y: i32 } {
+        return .{
+            .x = @intFromFloat(@round(x * self.scale)),
+            .y = @intFromFloat(@round(y * self.scale)),
+        };
     }
 
     /// Append one quad: two triangles over `x0..x1` by `y0..y1`, sampling

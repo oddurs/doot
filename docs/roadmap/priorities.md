@@ -108,13 +108,18 @@ rest reuse them:
 - **A per-row `wrapped` flag** — set when a line feed came from wrapping,
   not from `LF`. Selection joins wrapped lines without a newline (E1),
   reflow re-wraps by it (E4), and path detection spans it (A4).
+  **Built by [E1](completed/sprint-e1-selection.md)**: `grid.RowMeta.Flags`.
 - **A stable line identity** — a counter that survives the screen ring
   rotating and scrollback pushing. Selection anchors to it (E1), search
   results point at it (E3), semantic-prompt marks live on it (A3).
+  **Built by [E1](completed/sprint-e1-selection.md)**: `grid.RowMeta.id`,
+  minted by `Terminal.next_line_id`.
 - **Per-row marks alongside the ring** — a small side array that rotates
   with `Screen.offset`. Semantic prompts (A3) and search highlights (E3)
   want one. The trap is the ring: a mark that does not rotate with its row
-  is a mark on the wrong row.
+  is a mark on the wrong row. **The array exists** — `Screen.meta`, indexed
+  through the same `physical()` that `row()` uses, so it rotates for free —
+  and A3 adds its field to `RowMeta.Flags` rather than a second array.
 
 And one convention: **`src/platform/` is glue, not logic.** Objective-C
 compiled by Zig's clang, a C ABI, no file over 400 lines, nothing that
