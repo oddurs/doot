@@ -59,3 +59,32 @@ jobs:
         # The e2e suite drives a real shell on a real PTY. It never opens a
         # window, so it runs headless on a CI runner unchanged.
         run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
+
+  bench:
+    name: bench
+    runs-on: ubuntu-latest
+    # Never gates a merge. A shared CI runner is far too noisy to decide
+    # whether a change is a regression -- the job exists so the numbers show
+    # up next to the diff, and so an order-of-magnitude mistake is visible
+    # without anyone having to run it locally. bench/baseline.txt, captured
+    # on a quiet machine, remains the number to beat.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Run benchmarks
+        # No SDL and no window: vt, grid and terminal import nothing but std.
+        run: |
+          {
+            echo "### Benchmarks"
+            echo
+            echo "Shared runner, so these are indicative only -- not a baseline."
+            echo
+            echo '```'
+            zig build bench
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
