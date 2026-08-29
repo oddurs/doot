@@ -3,6 +3,9 @@
 Thanks for looking. terminator is a from-scratch terminal emulator, so most
 changes touch code with a spec behind it. That shapes how this repo works.
 
+Working on this with an agent? [CLAUDE.md](CLAUDE.md) is the same rules,
+written for one, and every Claude Code session in this repository reads it.
+
 ## Getting set up
 
 ```sh
