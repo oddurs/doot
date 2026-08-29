@@ -33,9 +33,9 @@ assert on the resulting screen.
 | `Cmd K` | clear |
 | wheel | scroll history, or arrow keys on the alternate screen |
 
-Flags: `--font-size N`, `--size COLSxROWS`, `--shell PATH`, `--frame-stats`
-(frame timing to stderr, once a second), `--screenshot PATH` (save the frame
-drawn one second in, as a BMP).
+Flags: `--font-size N` (6–72), `--size COLSxROWS` (up to 1000 each),
+`--shell PATH`, `--frame-stats` (frame timing to stderr, once a second),
+`--screenshot PATH` (save the frame drawn one second in, as a BMP).
 
 ## How it fits together
 
@@ -57,6 +57,7 @@ PTY ──► vt.Parser ──► Terminal ──► Renderer ──► SDL3 ─
 | `theme.zig` | 16 ANSI colors plus the generated xterm cube and grayscale ramp. |
 | `main.zig` | Reader thread, event loop, the mutex between them. |
 | `stats.zig` | The `--frame-stats` timer: lock hold, build and present per frame. |
+| `cli.zig` | Command-line options, and the bounds on anything the renderer will size a window from. |
 
 Two threads: one reads the PTY and feeds the parser, the main thread draws.
 One mutex between them, held by the main thread only long enough to copy the

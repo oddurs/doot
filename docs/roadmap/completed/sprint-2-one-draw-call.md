@@ -90,6 +90,29 @@ CJK and emoji cells come out blank — SF Mono has no glyphs for them and
 there is no fallback face. That predates this sprint, is unchanged by it,
 and is a feature gap rather than a render bug.
 
+## Follow-up: two defects in the instrumentation, not the optimization
+
+Code review of the merged sprints found both of this sprint's additions
+broken in ways the sprint's own testing would not have found, because the
+measuring apparatus was held to a lower standard than the code it measures.
+
+The `calls` column added to `--frame-stats` divided by the frame count with
+no zero guard, while `avgUs` beside it had one. A reporting window can
+elapse with no frame drawn at all — a mouse move over an idle window wakes
+the event loop without dirtying the screen — and the second such window
+panics. It aborts in Debug and ReleaseSafe; on aarch64 ReleaseFast it
+silently yields zero, and on x86_64 it raises `SIGFPE`.
+
+`--size` passed its argument to `Renderer.init` unchecked, where
+`init_cols * cell_w + pad * 2` overflowed: `--size 4000000000x30` panicked
+before drawing anything.
+
+Both are fixed, and option parsing moved to a pure `cli.zig` so the bounds
+have tests — `main.zig` cannot be unit-tested because it pulls in SDL, which
+is exactly how an unchecked flag reached the renderer. The lesson worth
+keeping: instrumentation that every claim in these records rests on deserves
+the same tests as the code it measures.
+
 ## What this changes about Sprint 3
 
 Sprint 3's value was already rescoped to "draw-call submission, not grid

@@ -103,6 +103,16 @@ pub const FrameStats = struct {
         if (elapsed < report_every_ns) return;
 
         const n = self.frames;
+        if (n == 0) {
+            // A window can elapse without a single frame being drawn: an
+            // event that wakes the loop without dirtying the screen -- a
+            // mouse move over an idle window -- does exactly that. There
+            // is nothing to average, so start a new window rather than
+            // dividing by it.
+            self.window_start = now;
+            self.window_bytes_start = bytes_read;
+            return;
+        }
         std.debug.print(
             "frame-stats  {d:>4} fps  lock {d:>7.0}/{d:<7.0}  build {d:>6.0}/{d:<6.0}  present {d:>7.0}/{d:<7.0} us  calls {d:>5}/{d:<5}  pty {d:>7.2} MiB/s\n",
             .{
@@ -170,4 +180,37 @@ test "a disabled timer records nothing" {
     var s = FrameStats.init(false);
     s.record(.{ .lock = 1, .build = 1, .present = 1 });
     try testing.expectEqual(@as(u64, 0), s.frames);
+}
+
+test "a window that elapses with no frames starts a new one instead of dividing by zero" {
+    var s = FrameStats.init(true);
+    // Backdate the window so a report is due, and record nothing -- what
+    // the event loop does when it wakes for an event that sets neither
+    // `redraw` nor `term.dirty`. Every column here is a per-frame average.
+    s.window_start -= 2 * report_every_ns;
+    s.maybeReport(0);
+
+    // The window moved on, and no frame was invented to fill it.
+    try testing.expectEqual(@as(u64, 0), s.frames);
+    try testing.expectEqual(@as(u64, 0), s.total_frames);
+    try testing.expect(nowNs() - s.window_start < report_every_ns);
+}
+
+test "a window with frames in it reports and resets" {
+    var s = FrameStats.init(true);
+    s.record(.{ .lock = 1_000, .build = 2_000, .present = 3_000, .calls = 2 });
+    s.record(.{ .lock = 3_000, .build = 4_000, .present = 5_000, .calls = 4 });
+    try testing.expectEqual(@as(u64, 2), s.frames);
+    try testing.expectEqual(@as(u64, 6), s.calls.sum);
+
+    s.window_start -= 2 * report_every_ns;
+    s.maybeReport(4096);
+
+    // The two frames are retired into the run total, not lost.
+    try testing.expectEqual(@as(u64, 2), s.total_frames);
+    try testing.expectEqual(@as(u64, 0), s.frames);
+    try testing.expectEqual(@as(u64, 0), s.calls.sum);
+    // The worst lock hold is a whole-run figure and outlives the window.
+    try testing.expectEqual(@as(u64, 3_000), s.total_lock_max);
+    try testing.expectEqual(@as(u64, 4096), s.window_bytes_start);
 }
