@@ -61,6 +61,8 @@ PTY ──► vt.Parser ──► Terminal ──► Renderer ──► SDL3 ─
 | `stats.zig` | The `--frame-stats` timer: lock hold, build and present per frame. |
 | `cli.zig` | Command-line options, and the bounds on anything the renderer will size a window from. |
 | `png.zig` | A small PNG encoder and decoder, so screenshots need no image library. |
+| `record.zig` | Records a command's terminal output, keystrokes and all, as a corpus. |
+| `audit.zig` | What the corpora ask a terminal to do, beside what this one does about it. |
 
 Two threads: one reads the PTY and feeds the parser, the main thread draws.
 One mutex between them, held by the main thread only long enough to copy the

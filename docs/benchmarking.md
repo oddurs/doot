@@ -93,7 +93,9 @@ every PR and writes them to the job summary and the log, but that job is
 
 ## The corpora
 
-Six files under `bench/corpus/`, 256 KiB each.
+Eight files under `bench/corpus/`. The first six are 256 KiB and generated;
+the last two are **recordings** of real sessions, made with
+`zig build record` — see [A0](roadmap/completed/sprint-a0-agent-corpus.md).
 
 | corpus | what it is |
 |---|---|
@@ -103,6 +105,8 @@ Six files under `bench/corpus/`, 256 KiB each.
 | `altscreen` | full-screen app redraw, absolute cursor addressing |
 | `cjk` | wide and multibyte text |
 | `region` | DECSTBM region + status line, as vim/less/tmux set |
+| `agent-claude` | a recorded agent CLI session, TUI and all |
+| `agent-stream` | a recorded colourised diff streaming at full speed |
 
 They are **committed files, not generated at run time**, so a number from today
 stays comparable with one from a year from now. Regenerate them only to add a

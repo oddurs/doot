@@ -28,10 +28,69 @@ that a shell-era terminal did not have to.
    key that does nothing, or a light theme drawn on a dark background.
 4. **There are several of them.** One window, one PTY is the wrong shape.
 
+## What the recordings measured
+
+A0 is done: `bench/corpus/agent-*.bin` are real recordings, `zig build
+audit` classifies every sequence in them, and this section is its output
+rather than a reading of the source. The table below it survives as the
+feature list; this is the measured part.
+
+**Two sequences are executed as something else.** Not missing — *wrong*.
+Both come from the same cause: `csiDispatch` switches on the final byte
+without looking at the private marker, so a keyboard-protocol request
+reaches the arm for an unrelated sequence.
+
+| Sequence | Emitted | What it means | What terminator does |
+|---|---|---|---|
+| `CSI > 4 m` | 4× per session | xterm modifyOtherKeys | **runs SGR 4 — turns underline on** |
+| `CSI < u` | 4× per session | kitty keyboard pop | **runs restore-cursor — the cursor teleports** |
+| `CSI > 0 q` | 1× per session | XTVERSION query | ignored, no reply; the agent waits out its timeout |
+
+Every agent CLI that speaks the kitty keyboard protocol turns on underline
+in this terminal on startup, and moves the cursor on exit. Tracked as
+[#28](https://github.com/oddurs/terminator/issues/28); fixing it belongs to
+[A2](#a2--the-modern-tui-protocol-two-weeks), which is where the private
+forms get implemented properly rather than merely stopped from firing.
+
+Everything else the recordings contain — `CUP`, `EL`, `SGR`, `ED`, `CHA`,
+`DECSTBM`, `DEC` set/reset mode, `DA`, OSC 0 — is handled. There were no
+unlisted sequences, which is the other thing the audit is for: a new agent
+version emitting something new shows up as a question rather than as
+silence.
+
+The same blindness has a second family. `csiDispatch` reads the
+*intermediates* no more than it reads the private marker, so `CSI SP @`
+(SL, scroll left) runs ICH and `CSI SP A` (SR, scroll right) runs CUU.
+Neither appears in today's recordings, so both are listed rather than
+counted — but they are the same bug as `CSI > 4 m` and #28 covers them.
+
+## The shape of agent output
+
+From the committed `.timing` sidecars, which record one line per read —
+a read boundary being what the terminal is actually handed at once.
+
+| | bytes | writes | over | per write | writes/s | busiest 100 ms |
+|---|---|---|---|---|---|---|
+| an agent working | 8,492 | 97 | 41.3 s | 87 B | 2.3 | 2,075 B |
+| an agent dumping a diff | 266,688 | 1,687 | ~0 s | 158 B | 84,621 | all of it |
+
+Two things follow, and neither was obvious from reading the source.
+
+**The terminal never receives more than 1,024 bytes per read.** Not 87, not
+158 — the *maximum* read in either recording is exactly 1,024, whatever the
+program wrote, because that is the kernel's pty output queue. The 64 KiB
+read buffer in `main.zig` can never fill. Whatever the parser is optimised
+for, it is optimised for kilobyte-sized handoffs.
+
+**An agent thinking is not a performance problem; an agent dumping is.**
+2.3 writes a second at 87 bytes is nothing — the interesting load is the
+diff, four orders of magnitude denser. The two cases want opposite things
+(latency versus throughput), and the corpora now name both.
+
 ## Where we are
 
-Read from the source, and marked as such — A0 turns this table into a
-measured one.
+Read from the source, and marked as such — the section above is the
+measured version.
 
 | Capability | Status | Where |
 |---|---|---|
@@ -54,7 +113,7 @@ old. It is the list.
 
 ## The sprints
 
-### A0 — Agent corpus and protocol audit (one week)
+### A0 — Agent corpus and protocol audit (one week) — **done**
 
 Record real sessions: an agent given a task in this repository, captured
 byte-for-byte with `script(1)` on the PTY, one file per agent CLI, plus a
@@ -82,6 +141,13 @@ alongside the six, and the audit table exists with a status for every row.
 
 *Risk:* low. The risk is in what it finds — expect at least one row of
 "mis-handled" that is not in the table above.
+
+*Result:* done, and the risk paid out — two mis-handled rows, both from
+the same cause, both firing on every agent session. See
+[the record](completed/sprint-a0-agent-corpus.md). The recordings needed a
+recorder (`zig build record`) rather than `script(1)`: capturing a TUI
+means being able to *type* at it, and `claude -p` emits one escape byte per
+kilobyte because it is not drawing anything.
 
 ### A1 — Attention (one week)
 
