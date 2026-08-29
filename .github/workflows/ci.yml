@@ -23,7 +23,7 @@ jobs:
     name: zig fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
@@ -41,7 +41,7 @@ jobs:
         os: [macos-15, macos-14]
         optimize: [Debug, ReleaseFast]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install SDL3 and FreeType
         run: |
