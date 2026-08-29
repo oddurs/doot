@@ -221,6 +221,48 @@ pub const Terminal = struct {
         self.markDirty();
     }
 
+    /// A run of printable ASCII, every byte one cell wide. Must leave the
+    /// terminal in exactly the state `print` called once per byte would --
+    /// the parser hands over whatever run a read boundary happened to
+    /// produce, so the split point is arbitrary and must not show.
+    ///
+    /// The saving is per row segment rather than per character: one wrap
+    /// check, one row lookup, one cell template, then a straight fill.
+    pub fn printRun(self: *Terminal, run: []const u8) void {
+        if (!self.modes.wrap) {
+            // With DECAWM off every byte past the margin overprints the last
+            // column. Rare, and `print` already gets it right.
+            for (run) |b| self.print(b);
+            return;
+        }
+
+        var rest = run;
+        while (rest.len > 0) {
+            if (self.pending_wrap) {
+                self.cursor.x = 0;
+                self.lineFeed();
+            }
+            const row = self.screen().row(self.cursor.y);
+            const n = @min(self.cols - self.cursor.x, rest.len);
+            var cell = Cell{
+                .fg = self.cursor.fg,
+                .bg = self.cursor.bg,
+                .attrs = self.cursor.attrs,
+            };
+            for (row[self.cursor.x..][0..n], rest[0..n]) |*dst, b| {
+                cell.cp = b;
+                dst.* = cell;
+            }
+            rest = rest[n..];
+            self.cursor.x += n;
+            if (self.cursor.x >= self.cols) {
+                self.cursor.x = self.cols - 1;
+                self.pending_wrap = true;
+            }
+        }
+        self.markDirty();
+    }
+
     pub fn execute(self: *Terminal, b: u8) void {
         switch (b) {
             0x07 => self.bell = true,
@@ -714,6 +756,9 @@ pub const Terminal = struct {
 pub fn charWidth(cp: u21) u8 {
     if (cp < 0x20) return 0;
     if (cp >= 0x7f and cp < 0xa0) return 0;
+    // Nothing below U+0300 is combining or wide, and that covers all of
+    // Latin, so most text skips the range tables entirely.
+    if (cp < 0x300) return 1;
     if (isCombining(cp)) return 0;
     if (isWide(cp)) return 2;
     return 1;
@@ -910,6 +955,118 @@ test "OSC 2 sets the window title" {
     defer t.deinit();
     feed(&t, "\x1b]2;hello world\x07");
     try testing.expectEqualStrings("hello world", t.title.items);
+}
+
+// -- printable-run fast path -----------------------------------------------
+//
+// `Parser.feed` hands runs of printable ASCII to `printRun`; `Parser.advance`
+// never does, so a terminal driven one byte at a time through `advance` is
+// the per-character reference the fast path has to match exactly.
+
+fn feedByteWise(t: *Terminal, bytes: []const u8) void {
+    var p = vt.Parser{};
+    for (bytes) |b| p.advance(t, b);
+}
+
+fn expectSameTerminal(a: *Terminal, b: *Terminal) !void {
+    try testing.expectEqual(a.cursor, b.cursor);
+    try testing.expectEqual(a.pending_wrap, b.pending_wrap);
+    try testing.expectEqual(a.scrollback.len, b.scrollback.len);
+    for (0..a.rows) |y| {
+        try testing.expectEqualSlices(Cell, a.screen().row(y), b.screen().row(y));
+    }
+    var i: usize = 0;
+    while (a.scrollback.back(i)) |line_a| : (i += 1) {
+        try testing.expectEqualSlices(Cell, line_a, b.scrollback.back(i).?);
+    }
+}
+
+test "a printable run matches print called once per byte" {
+    const inputs = [_][]const u8{
+        "abcdefghijkl", // wraps twice and scrolls
+        "abcd", // exactly the width: wrap must stay pending
+        "abcd\r\nef", // pending wrap cancelled by CR
+        "abcdefgh\x1b[1;31mijklmnop\x1b[0mq", // SGR change mid-run
+        "\x1b[2;3r\x1b[3;1Habcdefghijklmnop", // scroll region, run scrolls it
+        "\x1b[?7labcdefghij", // DECAWM off: overprint the last column
+        "ab\x1b[2Ccd\x1b[3;2Hxyz", // cursor movement between runs
+    };
+    for (inputs) |input| {
+        var fast = try mkTerm(4, 3);
+        defer fast.deinit();
+        var slow = try mkTerm(4, 3);
+        defer slow.deinit();
+        feed(&fast, input);
+        feedByteWise(&slow, input);
+        try expectSameTerminal(&fast, &slow);
+    }
+}
+
+test "a printable run split across feed calls behaves like one run" {
+    const text = "the quick brown fox jumps over the lazy dog";
+    var whole = try mkTerm(7, 4);
+    defer whole.deinit();
+    feed(&whole, text);
+
+    // Every split point, so the wrap and the pending-wrap column are both
+    // hit by a boundary at some point.
+    for (1..text.len) |cut| {
+        var split = try mkTerm(7, 4);
+        defer split.deinit();
+        var p = vt.Parser{};
+        p.feed(&split, text[0..cut]);
+        p.feed(&split, text[cut..]);
+        try expectSameTerminal(&whole, &split);
+    }
+}
+
+test "a long printable run wraps and scrolls" {
+    var t = try mkTerm(4, 3);
+    defer t.deinit();
+    feed(&t, "abcdefghijklmnop");
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("ijkl", line(&t, 1, &buf));
+    try testing.expectEqualStrings("mnop", line(&t, 2, &buf));
+    try testing.expect(t.pending_wrap);
+    try testing.expectEqual(@as(usize, 3), t.cursor.x);
+    try testing.expectEqual(@as(usize, 2), t.cursor.y);
+    try testing.expectEqual(@as(usize, 1), t.scrollback.len);
+}
+
+test "a printable run carries the cursor's colours and attributes" {
+    var t = try mkTerm(8, 2);
+    defer t.deinit();
+    feed(&t, "\x1b[4;32mrun");
+    for (0..3) |x| {
+        const cell = t.screen().at(x, 0);
+        try testing.expect(cell.attrs.underline);
+        try testing.expect(cell.fg.eql(.{ .indexed = 2 }));
+    }
+    try testing.expect(!t.screen().at(3, 0).attrs.underline);
+}
+
+test "a printable run marks the terminal dirty and snaps the view back" {
+    var t = try mkTerm(4, 2);
+    defer t.deinit();
+    feed(&t, "a\r\nb\r\nc\r\nd"); // two lines into scrollback
+    t.scrollView(2);
+    try testing.expectEqual(@as(usize, 2), t.view_offset);
+    t.dirty = false;
+
+    feed(&t, "run");
+    // New output while scrolled back returns you to the live screen, the
+    // same as a single printed character does.
+    try testing.expect(t.dirty);
+    try testing.expectEqual(@as(usize, 0), t.view_offset);
+}
+
+test "a printable run with wrap off overprints the last column" {
+    var t = try mkTerm(4, 2);
+    defer t.deinit();
+    feed(&t, "\x1b[?7labcdefgh");
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("abch", line(&t, 0, &buf));
+    try testing.expectEqualStrings("", line(&t, 1, &buf));
 }
 
 test "reverse index scrolls down at the top of the region" {

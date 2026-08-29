@@ -18,8 +18,8 @@ changed about this plan.
 | R | Screen row ring | **Done** — 1.7–3.8×, and it was not on the original plan |
 | 1 | Get the vsync wait out of the lock | **Done** — ~150× on bulk output, measured end to end |
 | 2 | One draw call for the glyphs | **Done** — 2 calls per frame, worst-case build ~40× better |
-| 4 | Printable-run fast path | Next — the top parse-side candidate |
-| 3 | Row-level damage tracking | Rescoped and now **gated** — build is ~70 µs at 200×60 |
+| 4 | Printable-run fast path | **Done** — 4.3× on `ascii`, 2–3× on everything else with ASCII in it |
+| 3 | Row-level damage tracking | Last one open. Rescoped and **gated** — build is ~70 µs at 200×60 |
 | 5 | Shrink the cell to 8 bytes | **Gate failed** — dropped as a speed sprint |
 
 ## What measurement changed
@@ -59,22 +59,29 @@ targets — it went from an assumption to a measured conclusion.
 
 ## Where the time goes now
 
-From `bench/baseline.txt`:
+From `bench/baseline.txt`, after Sprint 4:
 
 | corpus | MiB/s | what it is |
 |---|---|---|
-| cjk | 178.9 | wide and multibyte text |
-| sgr | 171.0 | colourised build log |
-| altscreen | 129.1 | full-screen app redraw |
-| ascii | 109.2 | plain source dump |
-| scroll | 96.5 | short lines, scrolls every line |
-| region | 72.6 | DECSTBM region + status line |
+| ascii | 490.2 | plain source dump |
+| altscreen | 394.2 | full-screen app redraw |
+| sgr | 372.2 | colourised build log |
+| scroll | 282.2 | short lines, scrolls every line |
+| cjk | 181.9 | wide and multibyte text |
+| region | 141.5 | DECSTBM region + status line |
 
-`region` is now the slowest corpus. A partial scroll region misses the
-whole-screen rotation, so vim, less and tmux — all of which set one — get
-per-row copies rather than a pointer bump. Worth a look after Sprint 4;
-it is not obvious that a region can be rotated without moving the rows
+The ranking has inverted again. `cjk` was the fastest corpus before Sprint
+4 and did not move, because three-byte codepoints never enter the printable
+run; everything else did. `region` is still last — a partial scroll region
+misses the whole-screen rotation, so vim, less and tmux get per-row copies
+rather than a pointer bump. That is [#12](https://github.com/oddurs/terminator/issues/12),
+and it is not obvious a region can be rotated without moving the rows
 around it.
+
+Above the parser, `--frame-stats` puts the frame at 2 µs of lock hold and
+~45–70 µs of build against an 8.3 ms budget at 120 Hz, and the PTY drains
+at 66–67 MiB/s end to end against a ~89 MiB/s ceiling for the kernel's tty
+layer alone.
 
 ## The sprints
 
@@ -156,7 +163,7 @@ could notice, or if idle-frame CPU becomes a battery complaint.
 alt screen are the traps. Every mutation path in terminal.zig needs an audit and
 a test that fails when its flag is missing.
 
-### Sprint 4 — Printable-run fast path in the parser (weeks 9–10)
+### Sprint 4 — Printable-run fast path in the parser — **done**
 
 In the `.ground` state, scan forward for a run of `0x20–0x7E` and hand the whole
 slice to a new `printRun` handler, which does one wrap check per row segment
@@ -170,6 +177,12 @@ and a test proves a run split across two `feed()` calls behaves identically.
 
 *Risk:* low to medium. The run must break correctly at the wrap point, the
 scroll-region edge and the last column.
+
+*Result:* `ascii` 111 → 481 MiB/s (4.3×); `altscreen` 3.3×, `scroll` 2.8×,
+`sgr` 2.2×, `region` 2.0×; `cjk` unchanged, as the control should be. End
+to end the PTY drains at 66–67 MiB/s, up from 46–49. The tests were
+mutation-tested; one of six mutants survived the first pass and got its
+own test. See [the record](completed/sprint-4-print-run.md).
 
 ### Sprint 5 — Shrink the cell to 8 bytes — **gate failed, dropped**
 
@@ -206,7 +219,7 @@ Revised after Sprint 0. The order is now **1 → 2 → 4 → 3**, with 5 dropped
 - **4 moved ahead of 3.** It is self-contained, it is the only remaining
   parse-side win, and it is now backed by evidence rather than assumption.
   Sprint 3 is the riskiest work on the plan and the least certain payoff;
-  Sprint 4 is neither.
+  Sprint 4 is neither. Done, and it paid: 4.3× on the corpus it targeted.
 - **5 is gone.** Its gate failed. See above.
 
 ## Adding a sprint
