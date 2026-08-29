@@ -17,9 +17,9 @@ changed about this plan.
 | 0 | Baseline and bench harness | **Done** |
 | R | Screen row ring | **Done** — 1.7–3.8×, and it was not on the original plan |
 | 1 | Get the vsync wait out of the lock | **Done** — ~150× on bulk output, measured end to end |
-| 2 | One draw call for the glyphs | Next |
-| 4 | Printable-run fast path | Promoted — now the top parse-side candidate |
-| 3 | Row-level damage tracking | Rescoped — saves draw calls, not grid reads |
+| 2 | One draw call for the glyphs | **Done** — 2 calls per frame, worst-case build ~40× better |
+| 4 | Printable-run fast path | Next — the top parse-side candidate |
+| 3 | Row-level damage tracking | Rescoped and now **gated** — build is ~70 µs at 200×60 |
 | 5 | Shrink the cell to 8 bytes | **Gate failed** — dropped as a speed sprint |
 
 ## What measurement changed
@@ -114,7 +114,7 @@ PTY drained at 0.26–0.40 MiB/s. It is now held 2 µs per frame and drains at
 were added to measure it. See
 [the record](completed/sprint-1-vsync-lock.md).
 
-### Sprint 2 — One draw call for the glyphs (weeks 5–6)
+### Sprint 2 — One draw call for the glyphs — **done**
 
 Replace per-glyph `SDL_SetTextureColorMod` + `SDL_RenderTexture` with a vertex
 buffer submitted through `SDL_RenderGeometryRaw`: per-vertex colour, one atlas
@@ -129,6 +129,13 @@ same buffer.
 *Risk:* medium. Wide glyphs, underline/strike rects and the cursor must all move
 into the same vertex path or they reintroduce the state changes.
 
+*Result:* 850–2,350 calls per frame became 2. Average build dropped 3–7×;
+the worst case dropped ~40×, from 8–9 ms spikes to ~0.2 ms, because those
+spikes were atlas uploads forcing a flush of queued texture draws. The
+premise was partly wrong — SDL3 folds colour-mod into its batch already —
+and the record says so. See
+[the record](completed/sprint-2-one-draw-call.md).
+
 ### Sprint 3 — Row-level damage tracking (weeks 7–8)
 
 Per-row dirty flags set by every mutation path — print, erase, scroll, SGR-only
@@ -136,6 +143,12 @@ rewrites, alt-screen switch, cursor movement. `draw()` rebuilds vertices only
 for dirty rows.
 
 *Why here:* composes with Sprint 2's buffer instead of being thrown away by it.
+
+*Gate:* Sprint 2 left the whole frame build at ~45 µs (100×30) to ~70 µs
+(200×60) against an 8.3 ms budget at 120 Hz. What damage tracking can still
+save is the atlas lookup and vertex generation for unchanged rows — tens of
+microseconds. Start this only if `--frame-stats` shows a build time a user
+could notice, or if idle-frame CPU becomes a battery complaint.
 
 *Done when:* typing one character in an 80×24 window rebuilds one row, not 24.
 
@@ -188,7 +201,8 @@ Revised after Sprint 0. The order is now **1 → 2 → 4 → 3**, with 5 dropped
 - **2 → 3.** Strengthened. The grid scan turned out to be free, so damage
   tracking saves nothing *except* draw-call submission — which means it has no
   measurable value at all until Sprint 2 defines what gets submitted. Doing 3
-  first would now be close to pointless, not merely wasteful.
+  first would now be close to pointless, not merely wasteful. Sprint 2 is
+  done, and it left Sprint 3 with a gate: the whole build is ~70 µs.
 - **4 moved ahead of 3.** It is self-contained, it is the only remaining
   parse-side win, and it is now backed by evidence rather than assumption.
   Sprint 3 is the riskiest work on the plan and the least certain payoff;

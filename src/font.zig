@@ -154,6 +154,10 @@ pub const Atlas = struct {
     pub fn init(alloc: std.mem.Allocator) !Atlas {
         const px = try alloc.alloc(u8, atlas_size * atlas_size * 4);
         @memset(px, 0);
+        // Texel (0, 0) is opaque white and never packed over: the shelf
+        // packer starts at (1, 1). Solid fills sample it, so that the
+        // renderer can put rectangles and glyphs in the same draw call.
+        @memset(px[0..4], 255);
         return .{ .pixels = px, .alloc = alloc };
     }
 
@@ -291,6 +295,24 @@ test "atlas rasterizes, caches, and packs without overlapping" {
 
     // A space is blank; asking for it must not crash the packer.
     _ = try atlas.get(&f, ' ', false, false);
+}
+
+test "the white texel is reserved and never packed over" {
+    var f = Font.init(14, null) catch |err| switch (err) {
+        Error.NoFontFound => return error.SkipZigTest,
+        else => return err,
+    };
+    defer f.deinit();
+    var atlas = try Atlas.init(testing.allocator);
+    defer atlas.deinit();
+
+    try testing.expectEqualSlices(u8, &.{ 255, 255, 255, 255 }, atlas.pixels[0..4]);
+    var cp: u21 = 0x21;
+    while (cp < 0x7f) : (cp += 1) {
+        const got = try atlas.get(&f, cp, false, false);
+        try testing.expect(got.glyph.x >= 1 and got.glyph.y >= 1);
+    }
+    try testing.expectEqualSlices(u8, &.{ 255, 255, 255, 255 }, atlas.pixels[0..4]);
 }
 
 test "atlas survives many distinct glyphs" {
