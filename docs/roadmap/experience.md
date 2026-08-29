@@ -10,10 +10,10 @@ size, motion tied to the display, chrome that disappears. Every sprint on
 this page is judged by a picture, the way every performance sprint is
 judged by a number.
 
-Arbiter: **the screenshot gallery** that X0 builds on the `--screenshot`
-flag [sprint 2](completed/sprint-2-one-draw-call.md) added. Every visual
-change ships with before-and-after captures at 1× and 2×, or it is not
-reviewed.
+Arbiter: **the screenshot gallery**, built by X0 on the `--screenshot` flag
+[sprint 2](completed/sprint-2-one-draw-call.md) added — `zig build gallery`,
+documented in [docs/gallery.md](../gallery.md). Every visual change ships
+with before-and-after captures at 1× and 2×, or it is not reviewed.
 
 ## Where we are
 
@@ -37,7 +37,7 @@ reviewed.
 
 ## The sprints
 
-### X0 — The gallery (one week)
+### X0 — The gallery (one week) — **done**
 
 Turn `--screenshot` into an acceptance test. A set of scripts under
 `bench/gallery/` each render one canonical screen and capture it at 1× and
@@ -61,6 +61,19 @@ for the same reason the bench is — but a reviewer sees them.
 one-pixel change in the cursor shows up as a diff in the PR summary.
 
 *Risk:* low. The flag exists; this is scripting around it.
+
+*Result:* done, and it needed more than scripting. `zig build gallery`
+renders ten captures headless and diffs them per pixel; see
+[the record](completed/sprint-x0-gallery.md) and
+[docs/gallery.md](../gallery.md). The done-when is demonstrated: drawing
+the cursor one pixel narrower moves 17 pixels at 1x and 34 at 2x, and
+changing its colour by one in a single channel moves 153 pixels at a worst
+delta of exactly 1.
+
+The scenes are scripts rather than `vim` and `htop`, whose output varies
+with version, locale and the files lying around — a pixel diff cannot tell
+that apart from a regression. Real-program screens want recorded byte
+streams, which [A0](agentic.md) produces.
 
 ### X1 — Typography (two weeks)
 

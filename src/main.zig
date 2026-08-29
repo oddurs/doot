@@ -128,6 +128,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         opts.font_size,
         opts.cols,
         opts.rows,
+        opts.scale,
     );
     defer renderer.deinit();
     if (opts.screenshot) |path| {
@@ -151,17 +152,24 @@ pub fn main(init: std.process.Init.Minimal) !void {
     _ = c.SDL_StartTextInput(renderer.window);
 
     const reader = try std.Thread.spawn(.{}, readerThread, .{&app});
-    defer {
+    var reader_joined = false;
+    defer if (!reader_joined) {
         // Order matters: tell the reader to stop and hang up the child
         // before joining, or we wait on a thread that isn't coming back.
+        // Skipped when the normal exit path below already joined it.
         app.running.store(false, .release);
         app.pty.shutdown();
         reader.join();
-    }
+    };
 
     var title_buf: [256:0]u8 = undefined;
     var last_title_len: usize = std.math.maxInt(usize);
     var font_size = opts.font_size;
+
+    // Why the loop ended. Draining the pty only makes sense when the child
+    // is already gone; quitting the window while something is still writing
+    // must hang up on it, not wait for it to finish.
+    var child_exited = false;
 
     var frame_stats = stats.FrameStats.init(opts.frame_stats);
     defer frame_stats.reportTotals(app.bytes_read.load(.monotonic));
@@ -267,10 +275,47 @@ pub fn main(init: std.process.Init.Minimal) !void {
         }
         frame_stats.maybeReport(app.bytes_read.load(.monotonic));
 
-        if (app.pty.exited()) app.running.store(false, .release);
+        if (app.pty.exited()) {
+            child_exited = true;
+            app.running.store(false, .release);
+        }
     }
 
+    // The loop can end because `pty.exited()` noticed the child was gone
+    // while bytes it had already written were still in the pty buffer, so
+    // stop the reader and drain the rest here rather than losing the tail
+    // of a program's last output. Joining first means nothing else is
+    // reading the pty, so this needs no lock.
     app.running.store(false, .release);
+    reader.join();
+    reader_joined = true;
+
+    // Both guards matter. Without `child_exited`, closing the window while
+    // a command is producing output waits for the pty to go quiet, which a
+    // busy child never allows -- the app would hang until killed. The
+    // deadline covers the rest: the child is gone but something it left
+    // behind still holds the pty open and is writing.
+    if (child_exited) {
+        const deadline = stats.nowNs() + 250 * std.time.ns_per_ms;
+        var tail: [65536]u8 = undefined;
+        while (stats.nowNs() < deadline and app.pty.waitReadable(20)) {
+            const n = app.pty.read(&tail) catch break;
+            if (n == 0) break;
+            app.parser.feed(&app.term, tail[0..n]);
+        }
+    }
+
+    // A `--shell` that prints and exits never reaches the one-second
+    // timer, so the last frame is captured on the way out instead. The
+    // gallery depends on this: its scenes are a few lines of printf and
+    // are gone in milliseconds.
+    if (renderer.screenshot_path != null) {
+        renderer.screenshot_after_ns = 0;
+        renderer.snapshot(&app.term) catch {};
+        _ = renderer.draw();
+    }
+
+    app.pty.shutdown();
 }
 
 /// `--help` and `--version` are the program's output, not a diagnostic:

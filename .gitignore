@@ -14,3 +14,6 @@ zig-out/
 
 # Local scratch
 /scratch/
+
+# Gallery renders (regenerate with `zig build gallery`)
+/bench/gallery/current/

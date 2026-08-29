@@ -100,3 +100,51 @@ jobs:
             cat bench-result.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  gallery:
+    name: gallery
+    runs-on: macos-15
+    # Never gates a merge, for the same reason the bench does not: a visual
+    # diff is usually an intended change, and the reviewer is the one who
+    # decides. The job exists so the numbers and the renders sit next to
+    # the diff instead of living on one person's machine.
+    #
+    # The committed references are rendered on a maintainer's Mac. A runner
+    # whose system font differs by a version will show a whole-image delta
+    # here that is not a regression -- read the uploaded renders, not just
+    # the percentages.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install SDL3 and FreeType
+        run: |
+          brew update --quiet
+          brew install sdl3 freetype pkg-config
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Render the gallery
+        # Headless: the build step sets SDL_VIDEODRIVER=dummy, so this
+        # needs no display. See src/gallery.zig.
+        run: |
+          zig build gallery 2>&1 | tee gallery.txt
+          {
+            echo "### Gallery"
+            echo
+            echo "Rendered headless on this runner and diffed against the committed"
+            echo "references. Indicative only -- a different system font version reads"
+            echo "as a whole-image delta. The renders are attached as an artifact."
+            echo
+            echo '```'
+            cat gallery.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gallery-renders
+          path: bench/gallery/current/*.png
+          if-no-files-found: error

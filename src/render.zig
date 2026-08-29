@@ -20,6 +20,7 @@ const grid = @import("grid.zig");
 const font = @import("font.zig");
 const theme = @import("theme.zig");
 const stats = @import("stats.zig");
+const png = @import("png.zig");
 const Terminal = @import("terminal.zig").Terminal;
 
 pub const c = @cImport({
@@ -77,6 +78,13 @@ pub const Renderer = struct {
     atlas: font.Atlas,
     theme: theme.Theme,
     frame: Frame = .{},
+    /// The pixel size a capture is cropped to: exactly the grid plus its
+    /// padding. The window itself can end up a pixel larger, because its
+    /// size is set in logical units and the host display's density decides
+    /// how those round -- and a capture that changes with the machine it
+    /// was taken on is not a reference.
+    capture_w: u32 = 0,
+    capture_h: u32 = 0,
     /// The frame's geometry, rebuilt every draw and submitted in one call.
     verts: std.ArrayList(Vertex) = .empty,
     indices: std.ArrayList(i32) = .empty,
@@ -101,6 +109,7 @@ pub const Renderer = struct {
         font_size_pt: u32,
         init_cols: u32,
         init_rows: u32,
+        scale_override: ?f32,
     ) !Renderer {
         if (!c.SDL_Init(c.SDL_INIT_VIDEO)) return Error.SdlInit;
         errdefer c.SDL_Quit();
@@ -127,7 +136,11 @@ pub const Renderer = struct {
         // display can show, which matters a lot for battery life.
         _ = c.SDL_SetRenderVSync(sdl, 1);
 
-        const scale = c.SDL_GetWindowPixelDensity(window);
+        // The display's density, and the density we draw at. They differ
+        // only when --scale asks for one the display does not have, which
+        // is how a 2x gallery capture is reproducible on a 1x CI runner.
+        const density = c.SDL_GetWindowPixelDensity(window);
+        const scale = scale_override orelse density;
         // Rasterize at device resolution: a 14pt font on a 2x display is a
         // 28px face, not a 14px face scaled up and blurry.
         const px_size: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(font_size_pt)) * scale));
@@ -152,6 +165,18 @@ pub const Renderer = struct {
         // has to carry that from the first frame.
         _ = c.SDL_UpdateTexture(tex, null, atlas.pixels.ptr, font.atlas_size * 4);
 
+        // Size the window so its *pixel* size fits the grid at this scale.
+        // Without this a forced scale would render 2x glyphs into a 1x
+        // window and show half the columns.
+        const pad_px_i: u32 = @intFromFloat(@round(pad * scale));
+        const want_w: u32 = init_cols * f.metrics.cell_w + pad_px_i * 2;
+        const want_h: u32 = init_rows * f.metrics.cell_h + pad_px_i * 2;
+        _ = c.SDL_SetWindowSize(
+            window,
+            @intFromFloat(@round(@as(f32, @floatFromInt(want_w)) / density)),
+            @intFromFloat(@round(@as(f32, @floatFromInt(want_h)) / density)),
+        );
+
         var self = Renderer{
             .window = window,
             .sdl = sdl,
@@ -162,7 +187,9 @@ pub const Renderer = struct {
             .scale = scale,
             .px_w = 0,
             .px_h = 0,
-            .pad_px = @intFromFloat(@round(pad * scale)),
+            .pad_px = @intCast(pad_px_i),
+            .capture_w = want_w,
+            .capture_h = want_h,
         };
         self.updateSize();
         return self;
@@ -368,10 +395,7 @@ pub const Renderer = struct {
         if (self.screenshot_path) |path| {
             if (t1 >= self.screenshot_after_ns) {
                 self.screenshot_path = null;
-                if (c.SDL_RenderReadPixels(self.sdl, null)) |surface| {
-                    defer c.SDL_DestroySurface(surface);
-                    _ = c.SDL_SaveBMP(surface, path.ptr);
-                }
+                self.saveScreenshot(path);
             }
         }
         _ = c.SDL_RenderPresent(self.sdl);
@@ -459,6 +483,48 @@ pub const Renderer = struct {
         if (cell.attrs.strike) {
             self.rect(px, py + @as(f32, @floatFromInt(m.ascent)) * 0.65, cw, thick, fg);
         }
+    }
+
+    /// Read the frame back and write it as a PNG.
+    ///
+    /// Read back before present rather than captured from the screen, so
+    /// this needs no screen-recording permission and returns exactly what
+    /// the renderer produced -- which is what makes it an acceptance test
+    /// rather than a photograph.
+    fn saveScreenshot(self: *Renderer, path: [:0]const u8) void {
+        const raw = c.SDL_RenderReadPixels(self.sdl, null) orelse return;
+        defer c.SDL_DestroySurface(raw);
+        // The renderer's own format varies by backend; normalise so the
+        // encoder only ever sees one layout.
+        const surface = c.SDL_ConvertSurface(raw, c.SDL_PIXELFORMAT_RGBA32) orelse return;
+        defer c.SDL_DestroySurface(surface);
+
+        // Crop to the size the grid asked for. Setting the window size is
+        // done in logical units, so on a 2x display an odd pixel height
+        // rounds up by one and the same capture differs by a row between
+        // machines. Cropping makes a reference reproducible anywhere.
+        const full_w: u32 = @intCast(surface.*.w);
+        const full_h: u32 = @intCast(surface.*.h);
+        const w = if (self.capture_w > 0) @min(self.capture_w, full_w) else full_w;
+        const h = if (self.capture_h > 0) @min(self.capture_h, full_h) else full_h;
+        const pitch: usize = @intCast(surface.*.pitch);
+        const src: [*]const u8 = @ptrCast(surface.*.pixels orelse return);
+
+        const alloc = self.atlas.alloc;
+        const pixels = alloc.alloc(u8, w * h * 4) catch return;
+        defer alloc.free(pixels);
+        // Rows are padded to the pitch, so copy row by row rather than
+        // treating the surface as one block.
+        for (0..h) |y| {
+            @memcpy(pixels[y * w * 4 ..][0 .. w * 4], src[y * pitch ..][0 .. w * 4]);
+        }
+
+        const bytes = png.encode(alloc, .{ .w = w, .h = h, .pixels = pixels }) catch return;
+        defer alloc.free(bytes);
+
+        const file = std.c.fopen(path.ptr, "wb") orelse return;
+        defer _ = std.c.fclose(file);
+        _ = std.c.fwrite(bytes.ptr, 1, bytes.len, file);
     }
 
     fn uploadAtlasRegion(self: *Renderer, r: font.Rect) void {

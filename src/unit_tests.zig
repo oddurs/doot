@@ -15,4 +15,5 @@ test {
     _ = @import("stats.zig");
     _ = @import("cli.zig");
     _ = @import("version.zig");
+    _ = @import("png.zig");
 }

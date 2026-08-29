@@ -87,6 +87,29 @@ pub fn build(b: *std.Build) void {
     const bench_step = b.step("bench", "Run the performance benchmarks");
     bench_step.dependOn(&bench_run.step);
 
+    // The screenshot gallery. Renders each canonical screen through the
+    // real app and diffs it against a committed PNG -- the arbiter for the
+    // experience roadmap, the way `bench` is for the performance one.
+    //
+    // It drives the built binary rather than linking the renderer, so it
+    // needs neither SDL nor FreeType itself. Running with no display is
+    // gallery.zig's job -- it puts SDL_VIDEODRIVER in the child's
+    // environment explicitly, because a spawn with no environment map
+    // gives the child an empty one and nothing set here would reach it.
+    const gallery_mod = b.createModule(.{
+        .root_source_file = b.path("src/gallery.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const gallery_exe = b.addExecutable(.{ .name = "gallery", .root_module = gallery_mod });
+    const gallery_run = b.addRunArtifact(gallery_exe);
+    gallery_run.addArtifactArg(exe);
+    gallery_run.has_side_effects = true;
+    if (b.args) |args| gallery_run.addArgs(args);
+    const gallery_step = b.step("gallery", "Render the screenshot gallery and diff it");
+    gallery_step.dependOn(&gallery_run.step);
+
     // End-to-end tests drive a real shell on a real PTY, so they live in
     // their own root and get their own module.
     const e2e_mod = b.createModule(.{
