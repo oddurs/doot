@@ -1,0 +1,16 @@
+# Zig
+.zig-cache/
+zig-out/
+
+# macOS
+.DS_Store
+._*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local scratch
+/scratch/
