@@ -35,6 +35,13 @@
 //! text each worked it out for themselves they would eventually disagree, and
 //! the bug would be one you can only see by comparing a screenshot with a
 //! pasteboard.
+//!
+//! **Rect mode is the one exception**, and it is one because a rectangle's two
+//! columns are shared by every row it covers while the glyphs under them are
+//! not: a single stored pair of columns cannot say "and one cell wider on row
+//! 4". So rect snaps per row, in `spanFor` -- which is still *one* place, and
+//! still the same one the renderer and the extractor both call, so the
+//! property that matters is intact.
 
 const std = @import("std");
 const grid = @import("grid.zig");
@@ -293,24 +300,66 @@ fn before(a: Pos, b: Pos) bool {
     return a.x < b.x;
 }
 
-/// Where an endpoint is now, clipping an evicted one to the oldest line that
-/// survives. Null only when nothing survives at all.
-fn clip(term: *Terminal, p: Point) ?Pos {
-    if (ordOf(term, p.line)) |ord| return .{ .ord = ord, .x = p.x };
-    // Eviction only ever removes the *oldest* lines, so a missing endpoint is
-    // the earlier one and the oldest surviving line is where it now begins.
-    if (term.scrollback.len > 0) return .{ .ord = 0, .x = 0 };
-    if (term.rows > 0) return .{ .ord = 0, .x = 0 };
-    return null;
+/// The smallest id anything on the grid still carries, or null when nothing
+/// does.
+///
+/// Deliberately not `lineByOrd(term, 0).meta.id`: `RI` and `IL` splice a
+/// *freshly minted*, and therefore higher, id above older rows, so the line
+/// that is oldest by position is not always the one with the smallest number.
+/// The scan is the cold path -- `clip` only reaches it once `ordOf` has
+/// already missed, and `ordOf`'s own fallback has already walked the same
+/// history.
+fn oldestId(term: *Terminal) ?u64 {
+    var oldest: ?u64 = null;
+    const keep = struct {
+        fn f(best: *?u64, id: u64) void {
+            if (id == 0) return; // never minted
+            if (best.* == null or id < best.*.?) best.* = id;
+        }
+    }.f;
+    const sb = &term.scrollback;
+    for (0..sb.len) |i| keep(&oldest, sb.backMeta(i).?.id);
+    const scr = term.screen();
+    for (0..term.rows) |y| keep(&oldest, scr.rowMeta(y).id);
+    return oldest;
 }
 
-/// Pin a selection to the grid. Null when **both** endpoints are gone, which
-/// is the caller's cue to clear it.
+/// Where an endpoint is now, or null when there is no honest answer.
+///
+/// A missing line was either **evicted** off the oldest end of the history or
+/// **destroyed in place**, and the two need opposite answers. Ids are minted
+/// monotonically, so an id smaller than every id still on the grid can only
+/// have fallen off the oldest end: ordinal 0 is then the earliest line there
+/// is, and clamping to it can only make the selection *smaller*. An id that is
+/// not smaller than all of them had its row retired under it -- `ED 0`,
+/// `ED 1`, `ED 2`, `IL`, `DL`, `SU`/`SD`, a region scroll or a
+/// height-shrinking resize, none of which clear the selection -- and no
+/// ordinal honestly stands for it.
+///
+/// Sending *that* to ordinal 0 is how a two-row selection came to put an
+/// entire 10,000-line session on the pasteboard while its highlight shrank to
+/// one row: the later endpoint jumps to the oldest surviving line, the copy
+/// grows by the whole scrollback, and nothing on screen says so. `ED 0` is
+/// what readline emits on nearly every prompt redraw, so it was not a corner.
+/// Dropping the selection loses a highlight, which is predictable and visible;
+/// silently copying the whole history is neither.
+fn clip(term: *Terminal, p: Point) ?Pos {
+    if (ordOf(term, p.line)) |ord| return .{ .ord = ord, .x = p.x };
+    const oldest = oldestId(term) orelse return null;
+    if (p.line >= oldest) return null; // destroyed in place
+    return .{ .ord = 0, .x = 0 };
+}
+
+/// Pin a selection to the grid. Null when both endpoints are gone, and null
+/// when either endpoint's line was destroyed in place rather than evicted --
+/// both are the caller's cue to clear it.
 pub fn resolve(term: *Terminal, s: Selection) ?Resolved {
     const a_live = ordOf(term, s.anchor.line) != null;
     const h_live = ordOf(term, s.head.line) != null;
     if (!a_live and !h_live) return null;
 
+    // Both of these fire: `clip` refuses an endpoint whose line was destroyed
+    // in place, and refusing the whole selection is the point of it.
     const a = clip(term, s.anchor) orelse return null;
     const h = clip(term, s.head) orelse return null;
     const fwd = !before(h, a);
@@ -323,7 +372,15 @@ pub fn resolve(term: *Terminal, s: Selection) ?Resolved {
 }
 
 /// The highlighted columns of the line at `ord`, or null if it has none.
-pub fn spanFor(res: Resolved, ord: usize) ?Span {
+///
+/// `cells` is that line's row. It is required rather than optional because
+/// **rect mode snaps its wide characters here, per row**: outside rect mode
+/// `normalize` has already snapped both endpoints once and this ignores the
+/// row entirely, but a rectangle's two columns are shared by every row it
+/// covers and the glyphs under them are not. Making the argument optional
+/// would leave a call that silently gets the un-snapped answer, which is the
+/// bug this signature exists to make unwriteable.
+pub fn spanFor(res: Resolved, ord: usize, cells: []const Cell) ?Span {
     if (ord < res.start.ord or ord > res.end.ord) return null;
     const cols = res.cols;
     var x0: usize = undefined;
@@ -331,6 +388,17 @@ pub fn spanFor(res: Resolved, ord: usize) ?Span {
     if (res.rect) {
         x0 = @min(res.start.x, res.end.x);
         x1 = @max(res.start.x, res.end.x) + 1;
+        if (cells.len == 0) return null;
+        // Snapping per row ripples the block's edges by at most one cell,
+        // wherever a pair straddles one. That is the smaller of the two
+        // evils. Widening the whole block instead, to the union of what every
+        // row asks for, keeps it perfectly rectangular -- but two misaligned
+        // rows of CJK have a spacer in almost every column between them, so
+        // the union walks a two-column drag out to the full width of the
+        // grid. There is a test pinning that.
+        const last = cells.len - 1;
+        x0 = snapLeft(cells, @min(x0, last));
+        x1 = snapRight(cells, @min(x1 - 1, last)) + 1;
     } else {
         x0 = if (ord == res.start.ord) res.start.x else 0;
         // Inclusive endpoints, half-open span: the `+ 1` is the whole reason
@@ -343,9 +411,9 @@ pub fn spanFor(res: Resolved, ord: usize) ?Span {
     return .{ .x0 = @intCast(x0), .x1 = @intCast(x1) };
 }
 
-/// Whether cell (`ord`, `x`) is selected.
-pub fn contains(res: Resolved, ord: usize, x: usize) bool {
-    const span = spanFor(res, ord) orelse return false;
+/// Whether cell (`ord`, `x`) of the row `cells` is selected.
+pub fn contains(res: Resolved, ord: usize, cells: []const Cell, x: usize) bool {
+    const span = spanFor(res, ord, cells) orelse return false;
     return x >= span.x0 and x < span.x1;
 }
 
@@ -389,17 +457,14 @@ pub fn normalize(term: *Terminal, s: Selection) ?Selection {
     // a spacer snaps left onto its `.wide` partner; an end that landed on a
     // `.wide` extends over the spacer that belongs to it. Without this the
     // highlight covers half a glyph and the copy drops or duplicates it.
-    if (res.rect) {
-        var lo = @min(start.x, end.x);
-        var hi = @max(start.x, end.x);
-        if (lineByOrd(term, start.ord)) |l| {
-            lo = snapLeft(l.cells, @min(lo, cols - 1));
-            hi = snapRight(l.cells, @min(hi, cols - 1));
-        }
-        const start_low = start.x <= end.x;
-        start.x = if (start_low) lo else hi;
-        end.x = if (start_low) hi else lo;
-    } else {
+    //
+    // Rect mode is the exception, and it is `spanFor`'s job: a rectangle's
+    // columns are the same on every row it covers but the glyphs under them
+    // are not, so one stored pair of columns cannot say "and one cell wider
+    // on row 4". Snapping here against the start row alone -- which is what
+    // this used to do -- let every other row in the block inherit the start
+    // row's decision and cut its pairs in half.
+    if (!res.rect) {
         if (lineByOrd(term, start.ord)) |l| start.x = snapLeft(l.cells, @min(start.x, cols - 1));
         if (lineByOrd(term, end.ord)) |l| end.x = snapRight(l.cells, @min(end.x, cols - 1));
     }
@@ -500,7 +565,7 @@ pub fn extract(alloc: std.mem.Allocator, term: *Terminal, s: Selection) ![:0]u8 
     var ord = res.start.ord;
     while (ord <= res.end.ord) : (ord += 1) {
         const line = lineByOrd(term, ord) orelse break;
-        const span = spanFor(res, ord) orelse continue;
+        const span = spanFor(res, ord, line.cells) orelse continue;
 
         // The row boundary the cap truncates at.
         const mark = out.items.len;
@@ -517,6 +582,13 @@ pub fn extract(alloc: std.mem.Allocator, term: *Terminal, s: Selection) ![:0]u8 
         }
 
         const covered_to_end = span.x1 >= res.cols;
+        // `covered_to_end` in `join` is an **equivalent** mutant, not a
+        // missing test: drop it and no input changes. In non-rect mode only
+        // the final row can stop short of the margin, and on the final row
+        // `join` reaches neither the trim branch (guarded by `covered_to_end`
+        // itself) nor anything that reads `sep_owed` afterwards. It stays
+        // because it is the rule the doc comment states; do not "fix" the
+        // survivor by deleting it.
         const join = !res.rect and line.meta.flags.wrapped and covered_to_end;
         if (res.rect or (covered_to_end and !join)) {
             var end = out.items.len;
@@ -596,6 +668,13 @@ fn expectCopy(t: *Terminal, s: Selection, want: []const u8) !void {
     try testing.expectEqualStrings(want, got);
 }
 
+/// Is cell (`x`, viewport row `y`) highlighted? `contains` takes the row
+/// because rect mode snaps wide pairs per row, so every test goes through
+/// this rather than repeating the lookup.
+fn hit(t: *Terminal, res: Resolved, y: usize, x: usize) bool {
+    return contains(res, viewOrd(t, y), t.viewRow(y), x);
+}
+
 // -- the word classifier, as a table --------------------------------------
 
 test "the word classifier is a table" {
@@ -658,26 +737,23 @@ test "contains, forward, backward, multi-row and rect" {
 
     const forward = resolve(&t, normalize(&t, sel2(&t, 0, 3, 2, 5)).?).?;
     // First row: from the anchor to the end.
-    try testing.expect(!contains(forward, viewOrd(&t, 0), 2));
-    try testing.expect(contains(forward, viewOrd(&t, 0), 3));
-    try testing.expect(contains(forward, viewOrd(&t, 0), 9));
+    try testing.expect(!hit(&t, forward, 0, 2));
+    try testing.expect(hit(&t, forward, 0, 3));
+    try testing.expect(hit(&t, forward, 0, 9));
     // Middle row: all of it.
-    try testing.expect(contains(forward, viewOrd(&t, 1), 0));
-    try testing.expect(contains(forward, viewOrd(&t, 1), 9));
+    try testing.expect(hit(&t, forward, 1, 0));
+    try testing.expect(hit(&t, forward, 1, 9));
     // Last row: up to and *including* the head column. The `+ 1` in
     // `spanFor` is what this is watching.
-    try testing.expect(contains(forward, viewOrd(&t, 2), 5));
-    try testing.expect(!contains(forward, viewOrd(&t, 2), 6));
+    try testing.expect(hit(&t, forward, 2, 5));
+    try testing.expect(!hit(&t, forward, 2, 6));
     // And nothing outside.
-    try testing.expect(!contains(forward, viewOrd(&t, 3), 0));
+    try testing.expect(!hit(&t, forward, 3, 0));
 
     // Dragged the other way, the same cells are selected.
     const backward = resolve(&t, normalize(&t, sel2(&t, 2, 5, 0, 3)).?).?;
     for (0..4) |y| for (0..10) |x| {
-        try testing.expectEqual(
-            contains(forward, viewOrd(&t, y), x),
-            contains(backward, viewOrd(&t, y), x),
-        );
+        try testing.expectEqual(hit(&t, forward, y, x), hit(&t, backward, y, x));
     };
 
     // A rectangle takes the same columns from every row it covers.
@@ -685,12 +761,12 @@ test "contains, forward, backward, multi-row and rect" {
     block.rect = true;
     const rect = resolve(&t, normalize(&t, block).?).?;
     for (0..3) |y| {
-        try testing.expect(!contains(rect, viewOrd(&t, y), 1));
-        try testing.expect(contains(rect, viewOrd(&t, y), 2));
-        try testing.expect(contains(rect, viewOrd(&t, y), 6));
-        try testing.expect(!contains(rect, viewOrd(&t, y), 7));
+        try testing.expect(!hit(&t, rect, y, 1));
+        try testing.expect(hit(&t, rect, y, 2));
+        try testing.expect(hit(&t, rect, y, 6));
+        try testing.expect(!hit(&t, rect, y, 7));
     }
-    try testing.expect(!contains(rect, viewOrd(&t, 3), 3));
+    try testing.expect(!hit(&t, rect, 3, 3));
 }
 
 test "a one-cell selection covers exactly one cell" {
@@ -698,9 +774,9 @@ test "a one-cell selection covers exactly one cell" {
     defer t.deinit();
     feed(&t, "abcdefgh");
     const r = resolve(&t, normalize(&t, sel2(&t, 0, 3, 0, 3)).?).?;
-    try testing.expect(!contains(r, viewOrd(&t, 0), 2));
-    try testing.expect(contains(r, viewOrd(&t, 0), 3));
-    try testing.expect(!contains(r, viewOrd(&t, 0), 4));
+    try testing.expect(!hit(&t, r, 0, 2));
+    try testing.expect(hit(&t, r, 0, 3));
+    try testing.expect(!hit(&t, r, 0, 4));
     try expectCopy(&t, sel2(&t, 0, 3, 0, 3), "d");
 }
 
@@ -849,6 +925,47 @@ test "extract in rect mode never joins and always trims" {
     try expectCopy(&t, block, "abcd\n123\nzz");
 }
 
+test "rect mode snaps wide characters in every row, not just the start row" {
+    var t = try mkTerm(10, 3);
+    defer t.deinit();
+    // Row 0 is plain letters; row 1 puts a pair at 2-3 and another at 4-5.
+    feed(&t, "abcdefghij\r\nab\u{4e00}\u{4e8c}efgh");
+    var block = sel2(&t, 0, 3, 1, 4);
+    block.rect = true;
+
+    // Columns 3..4 cut both of row 1's pairs in half, and row 0 -- the start
+    // row, the only one this used to consult -- has nothing to say about it.
+    // Before the fix this copied "de\n\u{4e8c}": `\u{4e00}` dropped entirely,
+    // and a highlight over two half glyphs.
+    try expectCopy(&t, block, "de\n\u{4e00}\u{4e8c}");
+
+    const res = resolve(&t, normalize(&t, block).?).?;
+    // Row 0 keeps the columns the drag asked for.
+    try testing.expect(!hit(&t, res, 0, 2));
+    try testing.expect(hit(&t, res, 0, 3));
+    try testing.expect(hit(&t, res, 0, 4));
+    try testing.expect(!hit(&t, res, 0, 5));
+    // Row 1's edges ripple by one cell each, so both pairs are whole.
+    try testing.expect(!hit(&t, res, 1, 1));
+    try testing.expect(hit(&t, res, 1, 2));
+    try testing.expect(hit(&t, res, 1, 5));
+    try testing.expect(!hit(&t, res, 1, 6));
+}
+
+test "rect mode does not widen a block to cover a whole misaligned CJK row" {
+    // The rejected alternative, pinned so nobody reaches for it: widening the
+    // block to the union of what every row asks for keeps it perfectly
+    // rectangular, but these two rows have a spacer in almost every column
+    // between them, so a two-column drag would walk out to the whole grid.
+    var t = try mkTerm(10, 3);
+    defer t.deinit();
+    feed(&t, "\u{4e00}\u{4e8c}\u{4e09}\u{56db}\u{4e94}\r\na\u{4e00}\u{4e8c}\u{4e09}\u{56db}");
+    var block = sel2(&t, 0, 4, 1, 5);
+    block.rect = true;
+    // Four cells, not twenty.
+    try expectCopy(&t, block, "\u{4e09}\n\u{4e8c}\u{4e09}");
+}
+
 test "extract spans the scrollback boundary" {
     var t = try mkTerm(8, 3);
     defer t.deinit();
@@ -915,6 +1032,135 @@ test "an evicted anchor clips to the oldest line that survives" {
     const dead = Selection{ .anchor = .{ .line = 1, .x = 0 }, .head = .{ .line = 2, .x = 0 } };
     try testing.expectEqual(@as(?Resolved, null), resolve(&t, dead));
     try testing.expectEqual(@as(?Selection, null), normalize(&t, dead));
+
+    // The other arm of the same test: an id that is *not* older than
+    // everything still on the grid cannot have been evicted, so it was
+    // destroyed in place and there is no ordinal that stands for it.
+    // `next_line_id` has never been minted, which is exactly that shape.
+    const ghost = Selection{
+        .anchor = .{ .line = idAt(&t, 0), .x = 0 },
+        .head = .{ .line = t.next_line_id, .x = 2 },
+    };
+    try testing.expectEqual(@as(?Resolved, null), resolve(&t, ghost));
+}
+
+test "an endpoint destroyed in place drops the selection rather than swallowing the history" {
+    // The review case. Before the fix `clip` sent *any* unresolvable endpoint
+    // to ordinal 0, reasoning that eviction only removes the oldest lines --
+    // but `ED`, `IL`/`DL` and a region scroll retire ids in the middle and at
+    // the end of the screen, and none of them clears the selection. A
+    // four-row selection then resolved to ordinals 0..56 and copied the whole
+    // session while its highlight shrank to one row, so there was no visual
+    // warning at all. `ED 0` is what readline emits on nearly every prompt
+    // redraw.
+    const Case = struct { name: []const u8, kill: []const u8 };
+    const cases = [_]Case{
+        .{ .name = "DL 1 on the head's row", .kill = "\x1b[4;1H\x1b[1M" },
+        .{ .name = "ED 0 from the row above", .kill = "\x1b[3;1H\x1b[J" },
+        .{ .name = "a region scroll over it", .kill = "\x1b[2;5r\x1b[3S\x1b[r" },
+    };
+    for (cases) |case| {
+        var t = try mkTerm(8, 5);
+        defer t.deinit();
+        for (0..60) |i| {
+            var buf: [16]u8 = undefined;
+            feed(&t, std.fmt.bufPrint(&buf, "HIST{d}\r\n", .{i}) catch unreachable);
+        }
+        // Fifty-six lines of history, every one of them older -- and
+        // therefore lower-numbered -- than anything on the screen.
+        try testing.expectEqual(@as(usize, 56), t.scrollback.len);
+        feed(&t, "\x1b[2J\x1b[HAAA\r\nBBB\r\nCCC\r\nDDD");
+
+        const s = normalize(&t, sel2(&t, 0, 0, 3, 2)).?;
+        try expectCopy(&t, s, "AAA\nBBB\nCCC\nDDD");
+
+        feed(&t, case.kill);
+        // The anchor is still there: this is the one-endpoint case, not the
+        // both-gone case `resolve` already refused.
+        try testing.expect(ordOf(&t, s.anchor.line) != null);
+        try testing.expect(ordOf(&t, s.head.line) == null);
+        testing.expectEqual(@as(?Resolved, null), resolve(&t, s)) catch |err| {
+            std.debug.print("selection survived: {s}\n", .{case.name});
+            return err;
+        };
+        const text = try extract(testing.allocator, &t, s);
+        defer testing.allocator.free(text);
+        // Not "HIST0\nHIST1\n..." -- 383 bytes of it, which is what this
+        // produced before.
+        try testing.expectEqualStrings("", text);
+    }
+}
+
+// -- viewOrd, at every offset ---------------------------------------------
+
+/// Twenty-nine lines into a four-row screen: enough history that
+/// `view_offset` has somewhere to go.
+fn scrolledTerm() !Terminal {
+    var t = try mkTerm(8, 4);
+    errdefer t.deinit();
+    for (0..30) |i| {
+        var buf: [16]u8 = undefined;
+        feed(&t, std.fmt.bufPrint(&buf, "L{d}\r\n", .{i}) catch unreachable);
+    }
+    return t;
+}
+
+fn scrollTo(t: *Terminal, off: usize) !void {
+    t.view_offset = 0;
+    t.scrollView(@intCast(off));
+    try testing.expectEqual(off, t.view_offset);
+}
+
+test "viewOrd names the row the viewport is actually showing, at every offset" {
+    // `viewOrd` positions every highlight, and E3 will reuse it for search.
+    // Every other test and every gallery capture runs at `view_offset == 0`,
+    // where dropping the offset -- `return term.scrollback.len + y;` -- is
+    // indistinguishable from the shipped code. This is the test that tells
+    // them apart.
+    var t = try scrolledTerm();
+    defer t.deinit();
+    try testing.expect(t.scrollback.len > 4);
+
+    var off: usize = 0;
+    while (off <= t.scrollback.len) : (off += 1) {
+        try scrollTo(&t, off);
+        for (0..t.rows) |y| {
+            const l = lineByOrd(&t, viewOrd(&t, y)) orelse return error.NoLineAtViewOrd;
+            // The same row by identity *and* by storage, so neither a
+            // coincidence of ids nor a copy of the cells can pass.
+            try testing.expectEqual(t.viewRowMeta(y).id, l.meta.id);
+            try testing.expectEqual(t.viewRow(y).ptr, l.cells.ptr);
+        }
+    }
+}
+
+test "exactly the selected row is highlighted, at every offset" {
+    var t = try scrolledTerm();
+    defer t.deinit();
+
+    // A whole row, picked while scrolled back so it is a history line rather
+    // than a screen one.
+    try scrollTo(&t, 5);
+    const s = normalize(&t, sel2(&t, 1, 0, 1, 7)).?;
+    const want = s.anchor.line;
+
+    var off: usize = 0;
+    while (off <= t.scrollback.len) : (off += 1) {
+        try scrollTo(&t, off);
+        const res = resolve(&t, s).?;
+        for (0..t.rows) |y| {
+            const selected = t.viewRowMeta(y).id == want;
+            for (0..t.cols) |x| {
+                testing.expectEqual(selected, hit(&t, res, y, x)) catch |err| {
+                    std.debug.print(
+                        "offset {d}: row {d} col {d} should be {}\n",
+                        .{ off, y, x, selected },
+                    );
+                    return err;
+                };
+            }
+        }
+    }
 }
 
 test "triple-click takes the whole logical line, across the wrap" {
@@ -935,6 +1181,23 @@ test "triple-click takes the whole logical line, across the wrap" {
     var lone = sel2(&t, 0, 1, 0, 1);
     lone.mode = .line;
     try expectCopy(&t, lone, "start");
+}
+
+test "an erase that reaches the margin ends the line, so a triple-click stops there" {
+    // `endLine`'s comment claimed the erasures that blank a row's tail all
+    // end a line, and `ECH` did not. The row below is then joined to a row
+    // with nothing on it: four spaces pasted in front of text that never had
+    // them, and a blank row that E4's reflow would re-wrap.
+    var t = try mkTerm(4, 3);
+    defer t.deinit();
+    feed(&t, "abcdef"); // row 0 wraps into row 1
+    try testing.expect(t.screen().rowMeta(0).flags.wrapped);
+    feed(&t, "\x1b[1;1H\x1b[4X"); // ECH over the whole of row 0
+    try testing.expect(!t.screen().rowMeta(0).flags.wrapped);
+
+    var s = sel2(&t, 1, 0, 1, 0);
+    s.mode = .line;
+    try expectCopy(&t, s, "ef"); // not "    ef"
 }
 
 test "the extraction cap truncates at a row boundary" {

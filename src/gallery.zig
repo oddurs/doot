@@ -34,6 +34,9 @@ const Capture = struct {
     /// is captured. The only way to photograph a highlight: there is no
     /// mouse under `SDL_VIDEODRIVER=dummy`.
     select: ?[]const u8 = null,
+    /// `--select-rect`: the same spec read as a rectangle, the way an
+    /// `Option`-drag sets it.
+    select_rect: bool = false,
 };
 
 /// One row per committed PNG. Sizes are chosen so a capture is a few tens
@@ -98,6 +101,25 @@ const captures = [_]Capture{
         .font_size = 14,
         .scale = 2,
         .select = "3,7,3,10",
+    },
+    // The third is the same columns as a *rectangle*, over three rows, of
+    // which only the last carries the wide pair. An adversarial review found
+    // that rect mode snapped against the start row alone, so every other row
+    // in the block inherited its columns and a pair below could be cut in
+    // half. The columns now widen to the union of what each covered row asks
+    // for, which is the only answer that is both rectangular and free of half
+    // glyphs -- and this capture is what says so: all three rows are
+    // highlighted over the *same* six columns, and the block's edges are
+    // straight.
+    .{
+        .name = "selection-rect-14pt-2x",
+        .scene = "selection",
+        .cols = 48,
+        .rows = 6,
+        .font_size = 14,
+        .scale = 2,
+        .select = "1,7,3,10",
+        .select_rect = true,
     },
 };
 
@@ -198,6 +220,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
                  "--no-record",
         });
         if (cap.select) |spec| try argv_list.appendSlice(gpa, &.{ "--select", spec });
+        if (cap.select_rect) try argv_list.append(gpa, "--select-rect");
 
         var child = try std.process.spawn(io, .{
             .argv = argv_list.items,

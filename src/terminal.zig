@@ -480,6 +480,10 @@ pub const Terminal = struct {
             'L' => self.insertLines(csi.get(0, 1)),
             'M' => self.deleteLines(csi.get(0, 1)),
             'P' => { // DCH
+                // Shifting left always blanks the tail, so the character at
+                // the margin is gone and this row no longer runs into the
+                // next. `ICH` below is the opposite case and stays.
+                self.endLine();
                 self.screen().deleteCells(self.cursor.x, self.cursor.y, csi.get(0, 1), self.blankCell());
             },
             '@' => { // ICH
@@ -574,8 +578,21 @@ pub const Terminal = struct {
         self.lineFeed();
     }
 
-    /// This row ends here, whatever put the cursor on it. `LF`, `IND`, `NEL`
-    /// and the erasures that blank a row's tail all end a line.
+    /// This row ends here, whatever put the cursor on it.
+    ///
+    /// `wrapped` means one thing: *the character at the right margin ran on
+    /// into the row below*. So the rule is the cell at the right margin, and
+    /// nothing wider: `LF`, `IND` and `NEL` end the line outright, `EL 0`,
+    /// `EL 2`, `ED 0` and `ED 2` blank the margin, `ECH` ends it only when it
+    /// reaches the margin, and `DCH` always does because shifting left blanks
+    /// the tail. `EL 1`, `ED 1` and `CR` leave the margin alone and so leave
+    /// the flag alone.
+    ///
+    /// `ICH` is the one deliberate exception: it shifts text *into* the
+    /// margin rather than blanking it, so the row still runs to the edge. A
+    /// shell editing a long wrapped command line inserts and then reprints the
+    /// remainder, and clearing the flag under it would split one logical line
+    /// in two for triple-click, copy and E4's reflow.
     fn endLine(self: *Terminal) void {
         self.cursorMeta().flags.wrapped = false;
     }
@@ -679,6 +696,9 @@ pub const Terminal = struct {
     fn eraseChars(self: *Terminal, n: u16) void {
         const r = self.screen().row(self.cursor.y);
         const end = @min(self.cursor.x + n, self.cols);
+        // Only when it reaches the margin: an ECH in the middle of a row
+        // leaves the character that wrapped exactly where it was.
+        if (end >= self.cols) self.endLine();
         @memset(r[self.cursor.x..end], self.blankCell());
     }
 
@@ -1366,6 +1386,19 @@ test "a line feed ends a line, and a carriage return does not" {
         // Cursor movement says nothing about where the line ends.
         .{ .name = "CUP", .bytes = "\x1b[1;2H", .want = true },
         .{ .name = "backspace", .bytes = "\x08", .want = true },
+        // The cursor sits at column 2 of 4. `wrapped` is a claim about the
+        // cell at the *right margin*, so an ECH that reaches it ends the line
+        // and one that stops short does not. Before this, `ECH` left a row it
+        // had blanked entirely still claiming to wrap, and a triple-click on
+        // the row below pasted the blanks in front of it.
+        .{ .name = "ECH to the margin", .bytes = "\x1b[2X", .want = false },
+        .{ .name = "ECH short of it", .bytes = "\x1b[1X", .want = true },
+        // DCH always reaches it: shifting left blanks the tail.
+        .{ .name = "DCH", .bytes = "\x1b[P", .want = false },
+        // ICH is the deliberate exception -- it shifts text *into* the margin
+        // rather than blanking it, and a shell editing a long wrapped command
+        // line does exactly that before reprinting the remainder.
+        .{ .name = "ICH", .bytes = "\x1b[@", .want = true },
     };
 
     for (cases) |case| {

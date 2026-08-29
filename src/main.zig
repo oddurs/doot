@@ -437,7 +437,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         // `--select`, re-applied every frame so it survives the shell's
         // output arriving underneath it. Under the lock, immediately before
         // the snapshot that photographs it.
-        if (opts.select) |spec| applySelect(&app.term, spec);
+        if (opts.select) |spec| applySelect(&app.term, spec, opts.select_rect);
 
         var draw_frame = false;
         if (dirty) {
@@ -508,7 +508,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     // are gone in milliseconds.
     if (renderer.screenshot_path != null) {
         renderer.screenshot_after_ns = 0;
-        if (opts.select) |spec| applySelect(&app.term, spec);
+        if (opts.select) |spec| applySelect(&app.term, spec, opts.select_rect);
         renderer.snapshot(&app.term) catch {};
         _ = renderer.draw();
     }
@@ -825,7 +825,7 @@ fn copySelection(app: *App, alloc: std.mem.Allocator) void {
 /// cells after the scene's own output has arrived. `setSelection` normalizes
 /// and only marks the terminal dirty when the result actually moved, so this
 /// does not turn into a repaint loop.
-fn applySelect(term: *Terminal, spec: cli.Select) void {
+fn applySelect(term: *Terminal, spec: cli.Select, rect: bool) void {
     if (term.rows == 0 or term.cols == 0) return;
     const at = struct {
         fn f(t: *Terminal, r: u32, col: u32) ?sel.Point {
@@ -837,7 +837,7 @@ fn applySelect(term: *Terminal, spec: cli.Select) void {
     }.f;
     const a = at(term, spec.r0, spec.c0) orelse return;
     const h = at(term, spec.r1, spec.c1) orelse return;
-    term.setSelection(.{ .anchor = a, .head = h });
+    term.setSelection(.{ .anchor = a, .head = h, .rect = rect });
 }
 
 fn handleWheel(app: *App, wheel: c.SDL_MouseWheelEvent) void {

@@ -32,6 +32,7 @@ const theme = @import("theme.zig");
 const stats = @import("stats.zig");
 const png = @import("png.zig");
 const sel = @import("sel.zig");
+const cli = @import("cli.zig");
 const Terminal = @import("terminal.zig").Terminal;
 
 pub const c = @cImport({
@@ -116,7 +117,10 @@ pub const Renderer = struct {
     screenshot_after_ns: u64 = 0,
 
     /// Backing-store pixels per logical pixel (2.0 on a Retina display).
+    /// Refreshed by `updateSize`, so it follows the window between displays.
     scale: f32,
+    /// `--scale`, kept so the refresh cannot overwrite it.
+    scale_override: ?f32,
     px_w: i32,
     px_h: i32,
     pad_px: i32,
@@ -173,7 +177,7 @@ pub const Renderer = struct {
         // only when --scale asks for one the display does not have, which
         // is how a 2x gallery capture is reproducible on a 1x CI runner.
         const density = c.SDL_GetWindowPixelDensity(window);
-        const scale = scale_override orelse density;
+        const scale = cli.effectiveScale(scale_override, density);
         // Rasterize at device resolution: a 14pt font on a 2x display is a
         // 28px face, not a 14px face scaled up and blurry.
         const px_size: u32 = @intFromFloat(@round(@as(f32, @floatFromInt(font_size_pt)) * scale));
@@ -231,6 +235,7 @@ pub const Renderer = struct {
             .atlas = atlas,
             .theme = theme.default,
             .scale = scale,
+            .scale_override = scale_override,
             .px_w = 0,
             .px_h = 0,
             .pad_px = @intCast(pad_px_i),
@@ -265,6 +270,12 @@ pub const Renderer = struct {
         _ = c.SDL_GetWindowSizeInPixels(self.window, &w, &h);
         self.px_w = @intCast(w);
         self.px_h = @intCast(h);
+        // `SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED` arrives here, so this is
+        // where the density has to be re-read: `toPixels` converts every mouse
+        // coordinate with it, and a window dragged from a 2x display to a 1x
+        // one would otherwise keep halving clicks for the rest of the session.
+        // `--scale` still wins -- see `cli.effectiveScale`.
+        self.scale = cli.effectiveScale(self.scale_override, c.SDL_GetWindowPixelDensity(self.window));
         // A failed resize leaves the old target in place: the next frame is
         // drawn at the stale size rather than not drawn at all.
         self.gpu.resize(@intCast(w), @intCast(h)) catch {};
@@ -364,7 +375,7 @@ pub const Renderer = struct {
         for (0..rows) |y| {
             @memcpy(self.frame.cells[y * cols ..][0..cols], term.viewRow(y));
             self.frame.sel[y] = if (resolved) |r|
-                sel.spanFor(r, sel.viewOrd(term, y)) orelse .{}
+                sel.spanFor(r, sel.viewOrd(term, y), term.viewRow(y)) orelse .{}
             else
                 .{};
         }

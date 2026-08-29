@@ -8,29 +8,57 @@ parse: PTY bytes through vt.Parser into Terminal
 
   corpus           MiB/s     median      ns/byte  KiB/frame  what it is
   ----------- ---------- ---------- ------------ ----------  ----------------------------------------
-  ascii            490.2      486.1         1.95       8365  plain source dump, no escapes
-  sgr              372.2      368.1         2.56       6352  colourised build log, dense SGR
-  scroll           282.2      278.8         3.38       4817  short lines, scrolls every line
-  altscreen        394.2      389.3         2.42       6728  full-screen app redraw, absolute cursor
-  cjk              181.9      180.3         5.24       3104  wide and multibyte text
-  region           141.5      141.0         6.74       2414  DECSTBM region + status line (vim/less/tmux)
+  ascii            491.4      484.9         1.94       8386  plain source dump, no escapes
+  sgr              397.9      389.3         2.40       6791  colourised build log, dense SGR
+  scroll           286.9      285.5         3.32       4896  short lines, scrolls every line
+  altscreen        403.3      398.2         2.36       6884  full-screen app redraw, absolute cursor
+  cjk              213.0      202.6         4.48       3635  wide and multibyte text
+  region           139.6      138.0         6.83       2382  DECSTBM region + status line (vim/less/tmux)
+  agent-claude      356.2      346.7         2.68       6079  a recorded agent CLI session, TUI and all
+  agent-stream      418.3      414.8         2.28       7140  a recorded colourised diff streaming at full speed
 
 scroll: ascii corpus vs terminal height (same bytes, taller screen)
 
   geometry         MiB/s     median       vs 80x24   was moving
   ----------- ---------- ---------- -------------- ------------
-  80x24            492.5      486.7          1.00x           28
-  80x48            482.5      477.1          0.98x           58
-  80x100           459.8      449.3          0.93x          123
-  80x200           456.7      454.5          0.93x          248
+  80x24            490.3      487.4          1.00x           28
+  80x48            477.6      474.6          0.97x           58
+  80x100           457.1      454.2          0.93x          123
+  80x200           456.7      455.5          0.93x          248
 
 scan: full-grid read, the walk render.draw does every frame
 
   geometry       us/scan     median      ns/cell        KiB  scans per 60Hz frame
   ----------- ---------- ---------- ------------ ----------  ----------------------------------------
-  80x24              1.3        1.3         0.68         30  12703
-  120x40             3.2        3.3         0.67         75  5195
-  200x60             8.1        8.3         0.68        187  2055
-  400x100           27.2       27.5         0.68        625  612
+  80x24              1.3        1.3         0.67         30  13036
+  120x40             3.2        3.2         0.67         75  5213
+  200x60             8.0        8.1         0.67        187  2076
+  400x100           26.7       26.9         0.67        625  623
 
-checksum 102380897115
+redact: secret scan over pty bytes, before they are recorded
+
+  corpus           MiB/s     median      ns/byte  what it is
+  ----------- ---------- ---------- ------------  ----------------------------------------
+  ascii           4003.0     3933.1         0.24  plain source dump, no escapes
+  sgr             5353.0     5313.8         0.18  colourised build log, dense SGR
+  scroll          4591.1     4583.2         0.21  short lines, scrolls every line
+  altscreen       3748.8     3722.7         0.25  full-screen app redraw, absolute cursor
+  cjk             7178.1     7168.5         0.13  wide and multibyte text
+  region          3394.9     3363.5         0.28  DECSTBM region + status line (vim/less/tmux)
+  agent-claude     7429.0     7398.1         0.13  a recorded agent CLI session, TUI and all
+  agent-stream     5727.8     5674.2         0.17  a recorded colourised diff streaming at full speed
+
+grid-checksum: the terminal state a replay must reproduce (one pass, 80x24)
+
+  corpus                  checksum  bytes
+  ----------- --------------------  ------------
+  ascii           14528f6beeb1e22b  262144
+  sgr             bca54644be743f4e  262144
+  scroll          986f28cfaf7d0e4b  262144
+  altscreen       85fc76b4afbc5c01  262144
+  cjk             ad39dfae4e1087af  262144
+  region          469de14e401a0e5e  262144
+  agent-claude     d7c93c8c2943603e  8492
+  agent-stream     5d76de0556470d3a  266688
+
+checksum 102382673301

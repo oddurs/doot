@@ -95,6 +95,20 @@ extends over its spacer — and word and line expansion all happen once, in
 separately they would eventually disagree, and that is a bug you can only see
 by comparing a screenshot against a pasteboard.
 
+**Rect mode is the one exception**, and the review below is why: a rectangle's
+two columns are shared by every row it covers while the glyphs under them are
+not, so a single stored pair of columns cannot say *"and one cell wider on row
+4"*. Rect therefore snaps per row, in `spanFor` — which is still one place,
+and still the one both the renderer and the extractor call, so the property
+that mattered is intact.
+
+**A missing endpoint is resolved by monotonicity, not by a guess.** Ids are
+minted monotonically, so an id smaller than every id still on the grid can
+only have fallen off the oldest end of the history: it clamps to ordinal 0,
+where it can only make the selection smaller. An id that is *not* smaller than
+all of them had its row retired under it, and the selection is dropped. See
+the review section — the first version guessed, and the guess was expensive.
+
 **Triple-click takes the logical line**, expanding across as many rows as
 `wrapped` says belong to it. Selecting one screen row would have left
 `wrapped` unused by two of the three granularities on the day it shipped.
@@ -187,7 +201,11 @@ the selection.
   test that bumps `next_line_id` by 5,000, sets a selection and relabels every
   row on the screen, and asserts the checksum does not move.
 
-Every committed grid checksum changed, because `wrapped` is now in them.
+Every committed grid checksum changed, because `wrapped` is now in them —
+`bench/baseline.txt` carries the new ones, and the whole-run `checksum` moved
+from `102380897115` to `102382673301`. That file had been left stale on the
+first pass while the sentence above claimed otherwise; the review caught it,
+and CLAUDE.md names that file as the arbiter.
 
 ## The performance story, which was not the one expected
 
@@ -302,15 +320,25 @@ trimming them silently deletes characters the shell printed. A test for
 `"abc   def"` wrapped at six columns was added and the mutant re-run. All ten
 are now caught.
 
+That was not enough. The adversarial review below planted seven more that
+these ten did not cover, and the reason is the one CLAUDE.md names: the ten
+were chosen by the author, from the same mental model that wrote the code.
+Every one of the seven now dies.
+
 **Gallery.** `--select R,C,R,C` applies a selection in viewport coordinates
 before the screenshot — there is no mouse under `SDL_VIDEODRIVER=dummy`, so it
-is the only way to photograph a highlight. Two captures over one scene: the
+is the only way to photograph a highlight. Three captures over one scene: the
 first cuts across a coloured background, a wrapped line and a reverse-video
 run at once, so the background override, the run-batch split and the reverse
 foreground fix are all in one picture; the second lands both edges on a wide
-character, so the highlight is six cells over a four-cell request. All eleven
-pre-existing captures are **pixel-identical**, which is what says the render
-refactor changed nothing it was not meant to.
+character, so the highlight is six cells over a four-cell request; the third
+(`--select-rect`, added by the review) is the same columns as a rectangle over
+three rows, of which only the last carries the wide pair — its block is one
+cell wider on that row and exactly as asked on the other two, which is the
+picture of per-row snapping. All eleven pre-existing captures are
+**pixel-identical**, which is what says the render refactor changed nothing it
+was not meant to, and all thirteen stayed identical through the review's
+fixes.
 
 ## Hand checks
 
@@ -328,6 +356,103 @@ The plan asks for four. Two were done and two could not be:
   rate curve is unit-tested — but neither is the same as having tried it.
   **They should be tried before this merges.**
 
+## What the adversarial review found
+
+CLAUDE.md says to have the change reviewed adversarially before merging, and
+that every sprint here has had a review find something the author's own
+testing missed. This one found seven, and the first is the worst bug the
+sprint produced.
+
+**1. A selection silently expanded to cover the entire scrollback.** `clip`
+sent *any* unresolvable endpoint to ordinal 0, on the reasoning that "eviction
+only ever removes the oldest lines, so a missing endpoint is the earlier one."
+That is false. `clearRows` and `fill` retire ids in the middle and at the end
+of the screen, and **none** of `ED 0`, `ED 1`, `ED 2`, `IL`, `DL`, `SU`/`SD`,
+a region scroll or a height-shrinking resize clears the selection. On an 8×5
+grid with 56 lines of history, a four-row selection extracting 24 bytes became
+ordinals 0..56 and **383 bytes** beginning `HIST0\nHIST1\n…` the moment a
+`DL 1` landed on its head row — and `ESC[J` reproduced it identically, which
+is what readline emits on nearly every prompt redraw. At a real 10,000-line
+scrollback that is the whole session on the pasteboard while the highlight
+*shrinks to one row*, so there is no visual warning at all.
+
+The fix uses monotonicity instead of a guess, as described above. Losing a
+highlight is a correct and predictable outcome; silently copying the history
+is not. The comparison is against the **smallest** surviving id rather than
+the id at ordinal 0, because `RI` and `IL` splice a freshly minted — and
+therefore higher — id above older rows, so oldest-by-position is not
+oldest-by-number. On the way past: `sel.zig:303` was byte-identical to the
+line above it, and both `orelse return null` in `resolve` were dead because
+`Terminal.init` forces `rows >= 1`. They are live now, and that is the point.
+
+**2. `viewOrd` was untested at non-zero `view_offset`.** It positions every
+highlight, and E3 will reuse it for search. Replacing its body with
+`return term.scrollback.len + y;` — which misplaces every highlight by
+`view_offset` rows whenever the user has scrolled back — passed all 361 tests
+and all 13 gallery captures, because every test and every capture ran at
+offset zero. Two property tests now sweep **every** offset from 0 to
+`scrollback.len`: `lineByOrd(viewOrd(y))` is `viewRow(y)`/`viewRowMeta(y)` by
+identity *and* by pointer, and exactly the selected row is highlighted. The
+mutant dies at the first non-zero offset.
+
+**3. Rect-mode wide snapping consulted only the start row**, so "wide
+characters select as a pair, in every mode" was false. On ten columns,
+`abcdefghij` over `ab一二efgh`, a rectangle from row 0 x=3 to row 1 x=4 copied
+`"de\n二"`: `一` dropped entirely and two glyphs cut in half. Snapping moved
+from `normalize` to `spanFor`, which is the only place that has the row.
+
+The rejected alternative is worth recording, because it looks better than it
+is: widening the block to the **union** of what every covered row asks for
+keeps it perfectly rectangular. But two misaligned rows of CJK have a spacer
+in almost every column between them, so the union walks a two-column drag out
+to the full width of the grid. Per-row snapping ripples the edges by at most
+one cell. There is a test pinning each.
+
+**4. `endLine`'s documented rule contradicted the code.** It claimed "the
+erasures that blank a row's tail all end a line", and `ECH`, `DCH` and `ICH`
+never called it: on four columns, `abcdef` then `ESC[1;1H ESC[4X` left row 0
+blank and still claiming to wrap, so a triple-click below it yielded
+`"    ef"` and E4's reflow would re-wrap a blank row. `wrapped` is a primitive
+four later sprints build on, so the rule is now stated precisely and the code
+made to match it: **`wrapped` is a claim about the cell at the right margin.**
+`ECH` ends the line when it reaches the margin and not before; `DCH` always
+does, because shifting left blanks the tail; `ICH` deliberately does not,
+because it shifts text *into* the margin rather than blanking it, and a shell
+editing a long wrapped command line inserts and then reprints the remainder —
+clearing the flag under it would split one logical line in two for
+triple-click, copy and reflow alike. Four rows joined the fourteen-case table.
+
+**5. `Renderer.scale` was assigned in `init` and never updated.** Every mouse
+coordinate is converted with it, and `SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED`
+routes to `updateSize`, which refreshed `px_w`/`px_h` and the GPU target but
+not the density — so a window dragged between displays of different density
+mapped clicks to the wrong cells for the rest of the session. `updateSize` now
+re-reads `SDL_GetWindowPixelDensity` through `cli.effectiveScale`, which keeps
+`--scale` authoritative; without that the gallery's 2× captures would stop
+pretending the first time the window was measured. The rule is unit-tested in
+`cli.zig`; **that the call happens at all is not**, because `render.zig`
+`@cImport`s SDL and is in neither test root. All 13 pre-existing captures are
+still pixel-identical, which is the only evidence available that the override
+survived.
+
+**6. `bench/baseline.txt` had not been regenerated**, while this record and
+the PR both claimed every committed checksum moved. It has been, twice, and
+the two runs agree.
+
+**7. One surviving mutant is equivalent.** Dropping `covered_to_end` from
+`join` in `extract` changes no output for any input: in non-rect mode only the
+final row can be short, and on the final row `join` reaches neither the trim
+branch nor anything that reads `sep_owed`. There is now a comment in the
+source saying so, so nobody "fixes" it later.
+
+**Seven more mutants, all of which now die**: `clip` sending every missing
+endpoint to ordinal 0; `viewOrd` dropping `view_offset`; rect mode not
+snapping per row; `ECH` at the margin not ending the line; `DCH` not ending
+it; `ICH` wrongly ending it; and `effectiveScale` forgetting the override.
+Re-measured afterwards, the geometry table is unmoved — 80×24 is still
+**1.00×**, which is the committed regression test that the ring's fast path
+fires.
+
 ## Traps for whoever touches this next
 
 - `Screen.meta` is indexed **physically**. `meta[y]` is the bug; `rowMeta(y)`
@@ -336,6 +461,15 @@ The plan asks for four. Two were done and two could not be:
   return, never by a number worked out at the call site.
 - `scrollScreenUp` and its three siblings are `inline` **for performance, not
   style**. Removing the keyword costs a quarter of the `ascii` corpus.
+- `wrapped` is a claim about the cell at the **right margin**, and nothing
+  wider. Adding an operation that blanks or overwrites that cell means
+  deciding whether it calls `endLine`; the fourteen-plus-four-case table is
+  where that decision is written down.
+- `spanFor` takes the row's cells because **rect mode snaps wide pairs per
+  row**. The argument is required, not optional, so that a caller cannot
+  silently get the un-snapped answer.
+- A selection endpoint that no longer resolves is only clamped when its id is
+  below every surviving id. Anything looser copies the whole scrollback.
 - The selection is cleared by a width-changing resize, `fullReset`, `ED 3` and
   an alt-screen switch. It deliberately survives `markDirty`'s view snap —
   that is the point of the ids, and `markDirty` is [E7](../essentials.md)'s to

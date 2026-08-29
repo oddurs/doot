@@ -28,6 +28,22 @@ pub const max_dim = 1000;
 pub const min_scale = 0.5;
 pub const max_scale = 4.0;
 
+/// The density to rasterize at and to convert pointer coordinates with: the
+/// display's, unless `--scale` overrode it.
+///
+/// It lives here rather than in `render.zig` because it is a rule about the
+/// flag, and because `render.zig` `@cImport`s SDL and cannot be unit-tested at
+/// all. The rule has to hold **after** `init` as well: a window dragged to a
+/// display of a different density re-measures the density, and every mouse
+/// coordinate is converted with this number, so a renderer that keeps the one
+/// it started with maps clicks to the wrong cells for the rest of the session.
+/// Re-measuring must not discard the override, or a gallery capture told to
+/// pretend it is on a 2x display would stop pretending the first time the
+/// window was measured.
+pub fn effectiveScale(override: ?f32, density: f32) f32 {
+    return override orelse density;
+}
+
 /// How long a recording is kept unless told otherwise. Days, not forever;
 /// 0 means forever. Mirrors `rec.default_retain_days`, which this file
 /// cannot import without importing libc into the pure-`std` unit.
@@ -55,6 +71,10 @@ pub const Options = struct {
     /// It exists so the gallery can photograph a highlight -- there is no
     /// other way to get a selection into a headless capture.
     select: ?Select = null,
+    /// `--select-rect`: make `--select` a rectangle, the way `Option`-drag
+    /// does. A separate flag rather than a fifth field so the spec keeps its
+    /// shape, and order-independent of `--select`.
+    select_rect: bool = false,
 
     // -- recording ------------------------------------------------------
     //
@@ -231,6 +251,7 @@ pub const help =
     \\  --copy-on-select  copy to the clipboard as soon as a drag ends
     \\  --select R,C,R,C  select these viewport cells (0-based, inclusive);
     \\                  for taking a picture of a highlight
+    \\  --select-rect   make --select a rectangle, as Option-drag does
     \\  -V, --version   print the version and the commit it was built from
     \\  -h, --help      this message
     \\
@@ -315,6 +336,8 @@ pub fn parseArgs(argv: []const [*:0]const u8) Action {
             i += 1;
             if (i >= argv.len) break;
             opts.select = parseSelect(std.mem.span(argv[i])) orelse opts.select;
+        } else if (std.mem.eql(u8, arg, "--select-rect")) {
+            opts.select_rect = true;
         } else if (std.mem.eql(u8, arg, "--no-record")) {
             opts.record = false;
         } else if (std.mem.eql(u8, arg, "--incognito")) {
@@ -399,6 +422,20 @@ test "scale is parsed and bounded" {
     try testing.expectEqual(@as(?f32, null), parseArgs(&bare).run.scale);
     const given = [_][*:0]const u8{ "terminator", "--scale", "2" };
     try testing.expectEqual(@as(?f32, 2.0), parseArgs(&given).run.scale);
+}
+
+test "the effective scale follows the display, and --scale outranks it" {
+    // `Renderer.scale` converts every mouse coordinate, and `updateSize` is
+    // where a window that moved between displays re-measures. Unset, the
+    // answer has to *move* with the display -- keeping the density measured
+    // at startup maps clicks to the wrong cells for the rest of the session.
+    try testing.expectEqual(@as(f32, 1.0), effectiveScale(null, 1.0));
+    try testing.expectEqual(@as(f32, 2.0), effectiveScale(null, 2.0));
+    // Given, it must not move, however often the density is re-measured, or
+    // the gallery's 2x captures would stop pretending on a 1x runner.
+    for ([_]f32{ 1.0, 2.0, 1.0, 3.0 }) |density| {
+        try testing.expectEqual(@as(f32, 2.0), effectiveScale(2.0, density));
+    }
 }
 
 test "argv is parsed into options" {
@@ -603,6 +640,13 @@ test "the selection flags parse, and default off" {
     const none = parseArgs(&bare).run;
     try testing.expect(!none.copy_on_select);
     try testing.expectEqual(@as(?Select, null), none.select);
+
+    try testing.expect(!parseArgs(&[_][*:0]const u8{"terminator"}).run.select_rect);
+    const rect = [_][*:0]const u8{ "terminator", "--select-rect", "--select", "1,2,3,4" };
+    const rect_opts = parseArgs(&rect).run;
+    // Order-independent of `--select`, which is why it is a flag of its own.
+    try testing.expect(rect_opts.select_rect);
+    try testing.expectEqual(@as(u32, 1), rect_opts.select.?.r0);
 
     const argv = [_][*:0]const u8{ "terminator", "--copy-on-select", "--select", "1,2,3,4" };
     const opts = parseArgs(&argv).run;
