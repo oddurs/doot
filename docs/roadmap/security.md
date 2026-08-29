@@ -218,6 +218,10 @@ minimal set, and the release notes quote it.
 
 ### S6 — The record's privacy (with L0, then per sprint)
 
+**Landed with [L0](completed/sprint-l0-record.md).** Every row below except
+the last three — which are gated on sprints that do not exist yet — has a
+test in `src/rec.zig` or `src/tests.zig`, and they run in CI.
+
 [record.md](record.md) specifies the privacy shape; S6 holds it as
 policy with a test per line, landing with L0 and re-run by every L
 sprint.
@@ -238,8 +242,29 @@ Encryption at rest is deliberately not here: FileVault is the platform's
 answer, and a second key the user must manage is a way to lose the
 record, not protect it. The docs say so.
 
+Two of those tests are worth their reasoning. Input is asserted absent by
+**scanning the whole file** for a typed passphrase and for any type-2 record,
+not by reading a flag back: a flag says what the writer believed, and the
+question is what is on the disk. And retention sweeps by **mtime**, not by the
+header's start time, because mtime is self-protecting — an open session's
+writes keep it inside the window, so a second instance's startup sweep cannot
+delete a file the first one still has open. That last one is only true because
+an idle session emits a `tick` a minute; as first written it buffered nothing,
+wrote nothing, and its mtime froze, so the sweep would have deleted a file its
+own writer still held open.
+
+The `0700` on the directory is enforced rather than requested: `makeDir`
+passes the mode to `mkdir`, and `chmod`s the directory to `0700` when it
+already exists. Treating `EEXIST` as success without checking the mode left a
+`chmod 0777`ed sessions directory world-listable — start times, session-id
+prefixes, sizes and counts — which is the whole of what the directory mode is
+for.
+
 *Done when:* the table's tests run in CI; `SECURITY.md` links the
-record's privacy section.
+record's privacy section. — **done**: [SECURITY.md](../../SECURITY.md) has a
+"Session recording" section linking [record.md's privacy
+section](record.md#privacy-is-the-design) and this one, and saying which
+recorder failures are worth a private report.
 
 *Risk:* none in code. The risk is a default drifting in a later sprint,
 which is what the tests are for.

@@ -144,9 +144,14 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
         var child = try std.process.spawn(io, .{
             .argv = &.{
-                terminator,    "--shell", scene_path, "--size", size,
-                "--font-size", font_size, "--scale",  scale,    "--screenshot",
+                terminator,    "--shell",     scene_path, "--size", size,
+                "--font-size", font_size,     "--scale",  scale,    "--screenshot",
                 out_path,
+                // A gallery capture is a test, not a session. Without this
+                // every `zig build gallery` drops eleven recordings into the
+                // user's own sessions directory, which is exactly the kind
+                // of thing an on-by-default recorder has to not do.
+                     "--no-record",
             },
             .environ_map = &environ,
             // The scenes print and exit; their output is the picture, not

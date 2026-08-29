@@ -28,6 +28,11 @@ pub const max_dim = 1000;
 pub const min_scale = 0.5;
 pub const max_scale = 4.0;
 
+/// How long a recording is kept unless told otherwise. Days, not forever;
+/// 0 means forever. Mirrors `rec.default_retain_days`, which this file
+/// cannot import without importing libc into the pure-`std` unit.
+pub const default_retain_days = 14;
+
 pub const Options = struct {
     font_size: u32 = default_font_size,
     shell: ?[:0]const u8 = null,
@@ -37,6 +42,32 @@ pub const Options = struct {
     rows: u32 = default_rows,
     /// Pretend the display has this pixel density. Null means ask it.
     scale: ?f32 = null,
+
+    // -- recording ------------------------------------------------------
+    //
+    // On by default, which is only defensible because it is visible: the
+    // title says `● rec` for as long as it is happening. See
+    // docs/roadmap/record.md and S6 of docs/roadmap/security.md.
+
+    /// Record this session's output. `--no-record` turns it off.
+    record: bool = true,
+    /// Record nothing at all, and say so in the title. `--incognito`.
+    incognito: bool = false,
+    /// Record keystrokes too. **Never on unless asked**, because keystrokes
+    /// contain passwords and the stream a program printed usually does not.
+    record_input: bool = false,
+    /// Where recordings go. Null is the platform's data directory.
+    record_dir: ?[:0]const u8 = null,
+    /// Days to keep a recording. 0 keeps them forever.
+    record_retain_days: u32 = default_retain_days,
+
+    /// What the title should say about this session, given the flags. The
+    /// runtime state (`Cmd ⇧ R`) can move `record_input` after this.
+    pub fn recordState(self: Options) RecordState {
+        if (self.incognito) return .incognito;
+        if (!self.record) return .off;
+        return if (self.record_input) .output_and_input else .output;
+    }
 };
 
 pub const Size = struct { cols: u32, rows: u32 };
@@ -68,6 +99,94 @@ pub fn parseFontSize(spec: []const u8) ?u32 {
     return std.math.clamp(n, min_font_size, max_font_size);
 }
 
+// ---------------------------------------------------------------------------
+// The recording indicator
+// ---------------------------------------------------------------------------
+
+/// What a session is recording, as far as the window title is concerned.
+pub const RecordState = enum {
+    /// `--no-record`. Nothing is written, and the title says nothing: the
+    /// user asked for it off and does not need to be told about it again.
+    off,
+    /// `--incognito`. Nothing is written, and the title says so, because a
+    /// tab that is deliberately not recording is worth being able to see.
+    incognito,
+    /// The default. Output only.
+    output,
+    /// Output and keystrokes.
+    output_and_input,
+};
+
+/// The window title: the child's title with the recording state appended.
+///
+/// Recording is on by default, and the objection to any on-by-default
+/// recorder is that it is invisible. There is no chrome in this terminal yet
+/// -- no tab strip, no status line, nothing to hang an indicator on -- and
+/// the window title is the one surface that exists today. So the indicator
+/// lives here, and `Cmd ⇧ R` moves it in the same frame, which is what makes
+/// it an indicator rather than a decoration.
+///
+/// Pure, and here rather than in `main.zig`, for the reason at the top of
+/// this file: `main.zig` pulls in SDL, so nothing in it can be tested without
+/// a window. `main.zig` keeps the `setTitle` call, which is glue.
+///
+/// The result is written into `buf` and never exceeds it. When `base` is too
+/// long, the base is what gets cut -- the indicator is the part that must not
+/// be lost -- and the cut lands on a UTF-8 boundary, because half a
+/// codepoint in a title bar is a visible mistake.
+pub fn windowTitle(buf: []u8, base: []const u8, state: RecordState) []const u8 {
+    const suffix = switch (state) {
+        .off => "",
+        .incognito => "incognito",
+        .output => "● rec",
+        .output_and_input => "● rec+input",
+    };
+    if (suffix.len == 0) {
+        const n = @min(base.len, buf.len);
+        const cut = utf8Floor(base, n);
+        @memcpy(buf[0..cut], base[0..cut]);
+        return buf[0..cut];
+    }
+
+    const sep = " — ";
+    // No child title yet -- a freshly opened window, before the shell has
+    // said anything. Leading separator with nothing before it reads as a
+    // mistake, so the indicator stands alone.
+    if (base.len == 0) return copyFloor(buf, suffix);
+
+    const tail = sep.len + suffix.len;
+    // Not even room for the separator and the indicator: the indicator is
+    // what matters, so it takes the whole buffer.
+    if (buf.len <= tail) return copyFloor(buf, suffix);
+
+    const room = buf.len - tail;
+    const cut = utf8Floor(base, @min(base.len, room));
+    @memcpy(buf[0..cut], base[0..cut]);
+    @memcpy(buf[cut..][0..sep.len], sep);
+    @memcpy(buf[cut + sep.len ..][0..suffix.len], suffix);
+    return buf[0 .. cut + tail];
+}
+
+/// As much of `s` as fits in `buf`, cut on a codepoint boundary.
+fn copyFloor(buf: []u8, s: []const u8) []const u8 {
+    const n = utf8Floor(s, @min(s.len, buf.len));
+    @memcpy(buf[0..n], s[0..n]);
+    return buf[0..n];
+}
+
+/// The largest length no greater than `n` that does not split a codepoint.
+fn utf8Floor(s: []const u8, n: usize) usize {
+    var i = @min(n, s.len);
+    // Continuation bytes are 0b10xxxxxx; back up over any of them.
+    while (i > 0 and (s[i - 1] & 0xc0) == 0x80) i -= 1;
+    if (i == 0) return 0;
+    // And over the lead byte itself, if the sequence it starts is not whole.
+    const lead = s[i - 1];
+    const need: usize = if (lead < 0x80) 1 else if (lead >= 0xf0) 4 else if (lead >= 0xe0) 3 else if (lead >= 0xc0) 2 else 1;
+    const have = @min(n, s.len) - (i - 1);
+    return if (have >= need) @min(n, s.len) else i - 1;
+}
+
 pub const help =
     \\terminator -- a terminal emulator
     \\
@@ -80,10 +199,20 @@ pub const help =
     \\  -V, --version   print the version and the commit it was built from
     \\  -h, --help      this message
     \\
+    \\Recording (the session's output is recorded by default, and the title
+    \\says so for as long as it is happening):
+    \\  --no-record            do not record this session
+    \\  --incognito            record nothing, and say so in the title
+    \\  --record-input         record keystrokes too (off unless asked)
+    \\  --record-dir PATH      where recordings go
+    \\  --record-retain-days N delete recordings older than this (default {d},
+    \\                         0 keeps them forever)
+    \\
     \\Keys:
     \\  Cmd +/-/0       font size
     \\  Cmd V           paste
     \\  Cmd K           clear
+    \\  Cmd Shift R     start/stop recording keystrokes
     \\  Wheel           scroll history
     \\
 ;
@@ -139,8 +268,31 @@ pub fn parseArgs(argv: []const [*:0]const u8) Action {
                 opts.cols = size.cols;
                 opts.rows = size.rows;
             }
+        } else if (std.mem.eql(u8, arg, "--no-record")) {
+            opts.record = false;
+        } else if (std.mem.eql(u8, arg, "--incognito")) {
+            // Both, so that nothing downstream has to remember that
+            // incognito implies not recording.
+            opts.incognito = true;
+            opts.record = false;
+        } else if (std.mem.eql(u8, arg, "--record-input")) {
+            opts.record_input = true;
+        } else if (std.mem.eql(u8, arg, "--record-dir")) {
+            i += 1;
+            if (i >= argv.len) break;
+            opts.record_dir = std.mem.span(argv[i]);
+        } else if (std.mem.eql(u8, arg, "--record-retain-days")) {
+            i += 1;
+            if (i >= argv.len) break;
+            opts.record_retain_days = std.fmt.parseInt(u32, std.mem.span(argv[i]), 10) catch
+                opts.record_retain_days;
         }
     }
+
+    // `--record-input --incognito`, in either order, records nothing.
+    // Recording input into a session that is not being recorded is not a
+    // state anything downstream should have to reason about.
+    if (!opts.record) opts.record_input = false;
     return .{ .run = opts };
 }
 
@@ -254,6 +406,124 @@ test "--help and --version win even after a flag that takes a value" {
     try testing.expectEqual(Action.help, parseArgs(&shot));
     const font = [_][*:0]const u8{ "terminator", "--font-size", "-V" };
     try testing.expectEqual(Action.version, parseArgs(&font));
+}
+
+// -- recording flags and the indicator ------------------------------------
+
+test "recording is on, and output-only, with no flags at all" {
+    // The default the whole privacy shape rests on: output yes, keystrokes
+    // no. If this test ever has to be changed, S6 of the security roadmap
+    // has been changed with it.
+    const bare = [_][*:0]const u8{"terminator"};
+    const opts = parseArgs(&bare).run;
+    try testing.expect(opts.record);
+    try testing.expect(!opts.record_input);
+    try testing.expect(!opts.incognito);
+    try testing.expectEqual(RecordState.output, opts.recordState());
+    try testing.expectEqual(@as(u32, default_retain_days), opts.record_retain_days);
+}
+
+test "the recording flags parse" {
+    const argv = [_][*:0]const u8{
+        "terminator",           "--record-input", "--record-dir", "/tmp/rec",
+        "--record-retain-days", "3",
+    };
+    const opts = parseArgs(&argv).run;
+    try testing.expect(opts.record);
+    try testing.expect(opts.record_input);
+    try testing.expectEqualStrings("/tmp/rec", opts.record_dir.?);
+    try testing.expectEqual(@as(u32, 3), opts.record_retain_days);
+    try testing.expectEqual(RecordState.output_and_input, opts.recordState());
+
+    const none = [_][*:0]const u8{ "terminator", "--no-record" };
+    try testing.expectEqual(RecordState.off, parseArgs(&none).run.recordState());
+
+    const incog = [_][*:0]const u8{ "terminator", "--incognito" };
+    const i = parseArgs(&incog).run;
+    try testing.expect(!i.record);
+    try testing.expectEqual(RecordState.incognito, i.recordState());
+
+    // Zero is a real value -- keep forever -- not a parse failure.
+    const forever = [_][*:0]const u8{ "terminator", "--record-retain-days", "0" };
+    try testing.expectEqual(@as(u32, 0), parseArgs(&forever).run.record_retain_days);
+    // And an unreadable one leaves the default rather than meaning zero.
+    const junk = [_][*:0]const u8{ "terminator", "--record-retain-days", "soon" };
+    try testing.expectEqual(@as(u32, default_retain_days), parseArgs(&junk).run.record_retain_days);
+}
+
+test "asking to record input into a session that is not recorded records nothing" {
+    // In either order. Two flags that contradict each other must resolve to
+    // the private answer, not to whichever came last.
+    const a = [_][*:0]const u8{ "terminator", "--record-input", "--incognito" };
+    const b = [_][*:0]const u8{ "terminator", "--incognito", "--record-input" };
+    const c = [_][*:0]const u8{ "terminator", "--record-input", "--no-record" };
+    for ([_][]const [*:0]const u8{ &a, &b, &c }) |argv| {
+        const opts = parseArgs(argv).run;
+        try testing.expect(!opts.record);
+        try testing.expect(!opts.record_input);
+    }
+}
+
+test "the title says what is being recorded, in every state" {
+    var buf: [256]u8 = undefined;
+    try testing.expectEqualStrings("zsh", windowTitle(&buf, "zsh", .off));
+    try testing.expectEqualStrings("zsh — incognito", windowTitle(&buf, "zsh", .incognito));
+    try testing.expectEqualStrings("zsh — ● rec", windowTitle(&buf, "zsh", .output));
+    try testing.expectEqualStrings("zsh — ● rec+input", windowTitle(&buf, "zsh", .output_and_input));
+}
+
+test "the indicator stands alone before the child has set a title" {
+    var buf: [256]u8 = undefined;
+    try testing.expectEqualStrings("", windowTitle(&buf, "", .off));
+    try testing.expectEqualStrings("incognito", windowTitle(&buf, "", .incognito));
+    try testing.expectEqualStrings("● rec", windowTitle(&buf, "", .output));
+    try testing.expectEqualStrings("● rec+input", windowTitle(&buf, "", .output_and_input));
+}
+
+test "a long title is cut, and the indicator is not" {
+    // The indicator is the part that must survive: a title bar that dropped
+    // the "recording" half to fit a path would be worse than useless.
+    var buf: [32]u8 = undefined;
+    const long = "a very long child title indeed that goes on";
+    const got = windowTitle(&buf, long, .output);
+    try testing.expect(got.len <= buf.len);
+    try testing.expect(std.mem.endsWith(u8, got, "● rec"));
+    try testing.expect(std.mem.startsWith(u8, got, "a very long"));
+
+    // And when there is no room for even the separator, the indicator wins.
+    var tiny: [7]u8 = undefined; // exactly "● rec": the dot is three bytes
+    try testing.expectEqualStrings("● rec", windowTitle(&tiny, long, .output));
+    // And smaller still: whatever comes back is valid UTF-8, never half a
+    // dot. A title bar showing a replacement glyph reads as our bug.
+    var i: usize = 0;
+    while (i <= 8) : (i += 1) {
+        var tinier: [8]u8 = undefined;
+        const squeezed = windowTitle(tinier[0..i], long, .output);
+        try testing.expect(squeezed.len <= i);
+        try testing.expect(std.unicode.utf8ValidateSlice(squeezed));
+    }
+}
+
+test "cutting a long title never splits a codepoint" {
+    // A title is child-controlled and can be any bytes at all. Half a
+    // codepoint in a title bar renders as a replacement glyph, which reads
+    // as a bug in the terminal rather than in the title.
+    const emoji = "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀";
+    var i: usize = 1;
+    while (i <= 64) : (i += 1) {
+        var buf: [64]u8 = undefined;
+        const got = windowTitle(buf[0..i], emoji, .output);
+        try testing.expect(got.len <= i);
+        try testing.expect(std.unicode.utf8ValidateSlice(got));
+    }
+
+    // Also with the indicator off, where the whole buffer is the title.
+    i = 1;
+    while (i <= 64) : (i += 1) {
+        var buf: [64]u8 = undefined;
+        const got = windowTitle(buf[0..i], emoji, .off);
+        try testing.expect(std.unicode.utf8ValidateSlice(got));
+    }
 }
 
 test "argv with no arguments at all is a plain run" {

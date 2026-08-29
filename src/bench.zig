@@ -32,6 +32,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const vt = @import("vt.zig");
 const grid = @import("grid.zig");
+const redact = @import("redact.zig");
+const check = @import("check.zig");
 const Terminal = @import("terminal.zig").Terminal;
 
 /// A 60 Hz frame. Used only to express throughput in units a terminal
@@ -340,6 +342,83 @@ pub fn main() !void {
                 kib,
                 @as(f64, @floatFromInt(frame_ns)) / per_scan_ns,
             },
+        );
+    }
+
+    // -- redact --------------------------------------------------------
+    //
+    // L0 scrubs every byte off the pty before it reaches the recording, so
+    // this scan sits directly in the drain path and its throughput is a
+    // budget, not a curiosity: `bench/dump.sh` drains at around 48 MiB/s
+    // through the real app, and a scanner slower than that halves the pty
+    // rate on its own.
+    //
+    // The corpora are clean -- `zig build check-corpora` says so -- which
+    // is also the honest worst case: every byte is examined and no match
+    // ever short-circuits the scan.
+
+    try out.print("\nredact: secret scan over pty bytes, before they are recorded\n\n", .{});
+    try out.print(
+        "  {s:<11} {s:>10} {s:>10} {s:>12}  {s}\n",
+        .{ "corpus", "MiB/s", "median", "ns/byte", "what it is" },
+    );
+    try out.print("  {s:-<11} {s:->10} {s:->10} {s:->12}  {s:-<40}\n", .{ "", "", "", "", "" });
+
+    for (corpora) |corpus| {
+        // A mutable copy: scrub works in place. Made once and scrubbed
+        // repeatedly, which is the same work every pass because the corpora
+        // carry nothing to replace and redaction is idempotent regardless.
+        const copy = try gpa.dupe(u8, corpus.bytes);
+        defer gpa.free(copy);
+
+        const passes = @max(1, (16 * 1024 * 1024) / corpus.bytes.len);
+        const total = corpus.bytes.len * passes;
+
+        var samples: [reps]u64 = undefined;
+        for (&samples) |*s| {
+            const t0 = nowNs();
+            // Deliberately not folded into `sink`: that value is printed as
+            // the `checksum` line at the bottom, and every recorded baseline
+            // carries it. Adding to it would invalidate all of them to no
+            // purpose.
+            for (0..passes) |_| std.mem.doNotOptimizeAway(redact.scrub(copy, null));
+            s.* = nowNs() - t0;
+        }
+
+        const b = best(&samples);
+        const m = median(&samples);
+        try out.print(
+            "  {s:<11} {d:>10.1} {d:>10.1} {d:>12.2}  {s}\n",
+            .{
+                corpus.name,
+                mibPerSec(total, b),
+                mibPerSec(total, m),
+                @as(f64, @floatFromInt(b)) / @as(f64, @floatFromInt(total)),
+                corpus.what,
+            },
+        );
+    }
+
+    // -- grid checksum -------------------------------------------------
+    //
+    // Not a timing. This is the number a replay of a recording of these
+    // bytes has to reproduce -- the arbiter for docs/roadmap/record.md,
+    // printed here so a change to the parser or the grid that alters the
+    // resulting screen is visible next to the diff. One pass, fixed
+    // geometry, so it is reproducible on any machine.
+
+    try out.print("\ngrid-checksum: the terminal state a replay must reproduce (one pass, 80x24)\n\n", .{});
+    try out.print("  {s:<11} {s:>20}  {s}\n", .{ "corpus", "checksum", "bytes" });
+    try out.print("  {s:-<11} {s:->20}  {s:-<12}\n", .{ "", "", "" });
+
+    for (corpora) |corpus| {
+        var term = try Terminal.init(gpa, 80, 24);
+        defer term.deinit();
+        var parser: vt.Parser = .{};
+        parser.feed(&term, corpus.bytes);
+        try out.print(
+            "  {s:<11} {x:>20}  {d}\n",
+            .{ corpus.name, check.checksum(&term), corpus.bytes.len },
         );
     }
 
