@@ -9,8 +9,9 @@ on:
         description: Tag to build and publish
         required: true
 
+# Read by default. Only the publish job creates anything.
 permissions:
-  contents: write
+  contents: read
 
 env:
   ZIG_VERSION: 0.16.0
@@ -19,6 +20,7 @@ jobs:
   build:
     name: Build ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -29,18 +31,14 @@ jobs:
           - os: macos-15
             arch: aarch64
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - name: Install SDL3 and FreeType
-        run: |
-          brew update --quiet
-          brew install sdl3 freetype pkg-config
-
-      - uses: mlugg/setup-zig@v2
+      - uses: ./.github/actions/setup
         with:
-          version: ${{ env.ZIG_VERSION }}
+          zig-version: ${{ env.ZIG_VERSION }}
+          libraries: 'true'
 
       # Deliberately no -Dtarget. The runner is already the target, and
       # naming it explicitly stops Zig using the macOS SDK's headers, so
@@ -75,7 +73,7 @@ jobs:
           # `dist/...` makes `shasum -a 256 -c` fail to find its own file.
           ( cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256" )
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: terminator-${{ matrix.arch }}
           path: dist/*.tar.gz*
@@ -85,12 +83,15 @@ jobs:
     name: Publish release
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
           merge-multiple: true
