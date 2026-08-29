@@ -139,11 +139,35 @@ def gen_cjk(rng):
     return cap(buf, "cjk.bin")
 
 
+def gen_region(rng):
+    """A full-screen app with a status line: DECSTBM carves out rows 1-23
+    and everything scrolls inside that region, leaving row 24 alone. This is
+    what vim, less and tmux actually do, and it is the case a whole-screen
+    scroll fast path does *not* cover."""
+    buf = [b"\x1b[?1049h\x1b[2J\x1b[1;23r"]
+    total = len(buf[0])
+    while total < TARGET:
+        frame = []
+        # Output inside the region, scrolling it line by line.
+        for _ in range(rng.randint(4, 20)):
+            text = " ".join(rng.choice(IDENTS) for _ in range(rng.randint(3, 8)))
+            frame.append(text[:79].encode() + b"\r\n")
+        # Repaint the status line outside the region, cursor saved/restored.
+        frame.append(b"\x1b7\x1b[24;1H\x1b[7m")
+        frame.append(f" {rng.choice(IDENTS)}  {rng.randint(1,9999):>5}/{rng.randint(1,9999):<5} ".ljust(80)[:80].encode())
+        frame.append(b"\x1b[0m\x1b8")
+        raw = b"".join(frame)
+        buf.append(raw)
+        total += len(raw)
+    buf.append(b"\x1b[r\x1b[?1049l")
+    return cap(buf, "region.bin")
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     # Each corpus gets its own seed, so adding a sixth generator later does
     # not shift the bytes of the first five and quietly void their baselines.
-    for i, gen in enumerate((gen_ascii, gen_sgr, gen_scroll, gen_altscreen, gen_cjk)):
+    for i, gen in enumerate((gen_ascii, gen_sgr, gen_scroll, gen_altscreen, gen_cjk, gen_region)):
         gen(random.Random(0xC0FFEE + i))
 
 

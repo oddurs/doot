@@ -8,28 +8,29 @@ parse: PTY bytes through vt.Parser into Terminal
 
   corpus           MiB/s     median      ns/byte  KiB/frame  what it is
   ----------- ---------- ---------- ------------ ----------  ----------------------------------------
-  ascii            103.7      101.1         9.19       1770  plain source dump, no escapes
-  sgr              165.8      160.2         5.75       2830  colourised build log, dense SGR
-  scroll            94.9       90.7        10.05       1620  short lines, scrolls every line
-  altscreen        128.7      123.6         7.41       2196  full-screen app redraw, absolute cursor
-  cjk              179.3      176.4         5.32       3060  wide and multibyte text
+  ascii            111.8      103.4         8.53       1908  plain source dump, no escapes
+  sgr              181.9      165.8         5.24       3104  colourised build log, dense SGR
+  scroll            96.4       92.7         9.90       1645  short lines, scrolls every line
+  altscreen        125.7      119.6         7.59       2145  full-screen app redraw, absolute cursor
+  cjk              175.7      171.4         5.43       2999  wide and multibyte text
+  region            71.4       65.5        13.35       1219  DECSTBM region + status line (vim/less/tmux)
 
 scroll: ascii corpus vs terminal height (same bytes, taller screen)
 
-  geometry         MiB/s     median       vs 80x24 KiB moved/LF
+  geometry         MiB/s     median       vs 80x24   was moving
   ----------- ---------- ---------- -------------- ------------
-  80x24            101.1       96.6          1.00x           28
-  80x48            104.4      100.5          1.03x           58
-  80x100            99.9       97.4          0.99x          123
-  80x200           107.3      103.8          1.06x          248
+  80x24            115.2      112.5          1.00x           28
+  80x48            115.8      105.9          1.01x           58
+  80x100           109.1      101.9          0.95x          123
+  80x200           105.0      101.4          0.91x          248
 
 scan: full-grid read, the walk render.draw does every frame
 
   geometry       us/scan     median      ns/cell        KiB  scans per 60Hz frame
   ----------- ---------- ---------- ------------ ----------  ----------------------------------------
-  80x24              1.4        1.4         0.71         30  12210
-  120x40             3.4        3.4         0.71         75  4911
-  200x60             8.5        8.5         0.71        187  1970
-  400x100           28.4       28.5         0.71        625  587
+  80x24              1.3        1.4         0.69         30  12517
+  120x40             3.4        3.4         0.71         75  4895
+  200x60             8.7        8.7         0.72        187  1925
+  400x100           28.7       28.9         0.72        625  581
 
-checksum 102379730931
+checksum 102380897115

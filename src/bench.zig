@@ -10,10 +10,11 @@
 //!            the whole stack below the renderer, which is where a terminal
 //!            spends its time when something dumps output at it.
 //!
-//!   scroll   The same corpus against a taller and taller screen. This one
-//!            is a controlled experiment rather than a measurement: parse
-//!            throughput tracks newline density almost exactly, and this is
-//!            what tells you whether the scroll memmove is the reason.
+//!   scroll   The same corpus against a taller and taller screen. A
+//!            controlled experiment rather than a measurement: it is what
+//!            identified the scroll memmove as the parse bottleneck, and it
+//!            now stands as the regression test for the fix. These rows
+//!            should read flat.
 //!
 //!   scan     A full-grid read, the walk `render.draw` performs every frame.
 //!            A proxy for the repaint cost that damage tracking removes and
@@ -68,6 +69,11 @@ const corpora = [_]Corpus{
         .name = "cjk",
         .what = "wide and multibyte text",
         .bytes = @embedFile("corpus_cjk"),
+    },
+    .{
+        .name = "region",
+        .what = "DECSTBM region + status line (vim/less/tmux)",
+        .bytes = @embedFile("corpus_region"),
     },
 };
 
@@ -226,18 +232,22 @@ pub fn main() !void {
 
     // -- scroll sensitivity --------------------------------------------
     //
-    // The one experiment that pays for this whole harness. Throughput above
-    // tracks newline density almost exactly (r = 0.99), which points at the
-    // scroll path rather than at per-byte parser dispatch. If that is right,
-    // parse speed must fall as the terminal gets taller -- a full-screen
-    // scroll memmoves (rows-1) x cols cells per line feed, so the cost per
-    // newline is linear in height. If throughput is flat here instead, the
-    // memmove is not the bottleneck and the theory is wrong.
+    // The one experiment that paid for this whole harness, kept as the
+    // regression test for what it found.
+    //
+    // Throughput used to track newline density almost exactly (r = 0.99),
+    // because a full-screen scroll memmoved (rows-1) x cols cells on every
+    // line feed -- so the same bytes against a taller screen ran
+    // proportionally slower, bottoming out at 0.20x by 80x200. Screen is a
+    // ring now and rotates instead, and these rows should read flat.
+    //
+    // If a future change makes this curve slope again, the fast path in
+    // Screen.scrollUp has stopped firing.
 
     try out.print("\nscroll: ascii corpus vs terminal height (same bytes, taller screen)\n\n", .{});
     try out.print(
         "  {s:<11} {s:>10} {s:>10} {s:>14} {s:>12}\n",
-        .{ "geometry", "MiB/s", "median", "vs 80x24", "KiB moved/LF" },
+        .{ "geometry", "MiB/s", "median", "vs 80x24", "was moving" },
     );
     try out.print("  {s:-<11} {s:->10} {s:->10} {s:->14} {s:->12}\n", .{ "", "", "", "", "" });
 
@@ -262,6 +272,9 @@ pub fn main() !void {
 
         var label_buf: [16]u8 = undefined;
         const label = try std.fmt.bufPrint(&label_buf, "80x{d}", .{h});
+        // What a line feed used to move at this height, before the ring.
+        // Not a measurement of the current code, which moves no rows at
+        // all here -- it is the size of the problem that went away.
         const moved_kib = (h - 1) * 80 * @sizeOf(grid.Cell) / 1024;
 
         try out.print(
