@@ -2,12 +2,27 @@
 
 ## Live plans
 
+[priorities.md](priorities.md) ranks the product priorities, says which
+roadmap owns what, draws the dependencies between them, and proposes the
+order of the next twelve sprints. Each roadmap has its own arbiter — the
+thing that decides whether a sprint is done — and opens by building it.
+
 - [performance.md](performance.md) — the performance sprints. Six planned,
   five done, two retired by measurement, none open.
-
-Feature gaps (selection, reflow, ligatures, mouse reporting) are tracked in
-the README's "Not done yet" list rather than here; they need design more than
-they need sequencing.
+- [experience.md](experience.md) — beautiful by default: typography, glyph
+  coverage, cursor and motion, colour, native chrome. Judged by screenshots.
+- [agentic.md](agentic.md) — a terminal for working with agents: attention,
+  the modern-TUI protocol, semantic prompts, links, tabs. Judged against
+  recorded agent sessions.
+- [essentials.md](essentials.md) — selection, mouse, search, reflow, config,
+  keys, scrollback. Judged by the end-to-end suite.
+- [correctness.md](correctness.md) — VT conformance, Unicode, identity,
+  robustness. Judged by esctest, vttest and the fuzzer.
+- [platform.md](platform.md) — app bundle, signing, distribution, updates,
+  diagnostics. Judged on a fresh Mac.
+- [dependencies.md](dependencies.md) — own the GPU path, the rasterizer,
+  the shaper and the window, until the binary links only libc and the
+  system frameworks. Judged by `otool -L` and the gallery.
 
 ## Completed and retired
 
