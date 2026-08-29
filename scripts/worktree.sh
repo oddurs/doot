@@ -18,7 +18,12 @@
 
 set -eu
 
-repo=$(git rev-parse --show-toplevel)
+# The main checkout, wherever this is run from. --show-toplevel would name
+# the *current* worktree, so run from inside one the root became
+# terminator-wt/terminator-wt and `done` could not find anything. The
+# common git dir is the main checkout's .git no matter which worktree
+# asks.
+repo=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 root=$(dirname "$repo")/terminator-wt
 
 usage() {
@@ -45,6 +50,11 @@ done)
     branch=${2:?usage: worktree.sh done <branch>}
     dir="$root/$(printf '%s' "$branch" | tr '/' '-')"
     [ -d "$dir" ] || { echo "worktree: no such worktree $dir" >&2; exit 1; }
+    case "$(pwd -P)/" in "$dir"/*)
+        echo "worktree: you are standing in $dir; cd out of it first" >&2
+        exit 1
+        ;;
+    esac
     if [ -n "$(git -C "$dir" status --porcelain)" ]; then
         echo "worktree: $dir has uncommitted changes; commit or discard them first" >&2
         git -C "$dir" status --short >&2
