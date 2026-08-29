@@ -16,8 +16,8 @@ changed about this plan.
 |---|---|---|
 | 0 | Baseline and bench harness | **Done** |
 | R | Screen row ring | **Done** — 1.7–3.8×, and it was not on the original plan |
-| 1 | Get the vsync wait out of the lock | Next |
-| 2 | One draw call for the glyphs | Ready |
+| 1 | Get the vsync wait out of the lock | **Done** — ~150× on bulk output, measured end to end |
+| 2 | One draw call for the glyphs | Next |
 | 4 | Printable-run fast path | Promoted — now the top parse-side candidate |
 | 3 | Row-level damage tracking | Rescoped — saves draw calls, not grid reads |
 | 5 | Shrink the cell to 8 bytes | **Gate failed** — dropped as a speed sprint |
@@ -93,7 +93,7 @@ runner is far too noisy to decide a regression.
 
 It paid for itself immediately: see "What measurement changed" above.
 
-### Sprint 1 — Get the vsync wait out of the lock (weeks 3–4)
+### Sprint 1 — Get the vsync wait out of the lock — **done**
 
 Build the frame into a display list under the lock, release the mutex, then
 submit and present. Coalesce reader wake-ups so several read batches arriving
@@ -107,6 +107,12 @@ cause.
 *Done when:* bulk-output throughput is no longer pinned to the refresh rate.
 
 *Risk:* medium. The display list must not alias terminal state after unlock.
+
+*Result:* the mutex was held ~8 ms per frame on a 120 Hz display and the
+PTY drained at 0.26–0.40 MiB/s. It is now held 2 µs per frame and drains at
+41–51 MiB/s — about 150×. The `--frame-stats` timer and `bench/dump.sh`
+were added to measure it. See
+[the record](completed/sprint-1-vsync-lock.md).
 
 ### Sprint 2 — One draw call for the glyphs (weeks 5–6)
 
@@ -175,9 +181,10 @@ Revised after Sprint 0. The order is now **1 → 2 → 4 → 3**, with 5 dropped
 - **0 → everything.** Measurement first, or every sprint after it is a guess
   dressed as a result. It is also the only sprint that can *retire* work, and
   it retired one immediately.
-- **1 → 2, 3.** Unchanged, and the bench cannot settle it: the vsync wait sits
-  inside the mutex, and no headless harness can see that. It needs a frame
-  timer in the real app, which is part of the sprint.
+- **1 → 2, 3.** Unchanged, and the bench could not settle it: the vsync wait
+  sat inside the mutex, and no headless harness can see that. It needed a
+  frame timer in the real app, which shipped with the sprint as
+  `--frame-stats`. Done.
 - **2 → 3.** Strengthened. The grid scan turned out to be free, so damage
   tracking saves nothing *except* draw-call submission — which means it has no
   measurable value at all until Sprint 2 defines what gets submitted. Doing 3

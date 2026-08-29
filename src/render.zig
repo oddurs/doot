@@ -4,11 +4,20 @@
 //! means every background is a batch of solid rects and every glyph comes from
 //! one texture, which is what keeps a full repaint down to a handful of draw
 //! calls no matter how busy the screen is.
+//!
+//! A frame is drawn in two steps that run under different locking rules.
+//! `snapshot` copies the visible cells out of the terminal and must be called
+//! with the terminal mutex held; `draw` renders that copy and presents it, and
+//! must be called with the mutex released. The wait for vblank lives inside
+//! present, and while it sat inside the lock the reader thread could not feed
+//! a byte for the whole of every frame -- bulk output was throttled to a few
+//! KiB per refresh. The copy costs microseconds; the wait costs milliseconds.
 
 const std = @import("std");
 const grid = @import("grid.zig");
 const font = @import("font.zig");
 const theme = @import("theme.zig");
+const stats = @import("stats.zig");
 const Terminal = @import("terminal.zig").Terminal;
 
 pub const c = @cImport({
@@ -27,6 +36,24 @@ const pad = 6;
 
 const atlas_bytes = font.atlas_size * font.atlas_size * 4;
 
+/// What one frame draws: a copy of the visible cells plus where the cursor
+/// is, owned by the renderer. Taken under the terminal lock and drawn after
+/// it is released, so it must not alias terminal state -- every field here
+/// is a value, and `cells` is renderer-owned memory the terminal never sees.
+pub const Frame = struct {
+    cells: []grid.Cell = &.{},
+    cols: usize = 0,
+    rows: usize = 0,
+    /// Where the block cursor goes, or null when it is hidden, scrolled out
+    /// of view, or off the grid. The covered cell is redrawn in the cursor's
+    /// contrast colour, so it travels with the position.
+    cursor: ?struct { x: usize, y: usize, cell: grid.Cell } = null,
+
+    fn row(self: *const Frame, y: usize) []const grid.Cell {
+        return self.cells[y * self.cols ..][0..self.cols];
+    }
+};
+
 pub const Renderer = struct {
     window: *c.SDL_Window,
     sdl: *c.SDL_Renderer,
@@ -34,6 +61,7 @@ pub const Renderer = struct {
     font: font.Font,
     atlas: font.Atlas,
     theme: theme.Theme,
+    frame: Frame = .{},
 
     /// Backing-store pixels per logical pixel (2.0 on a Retina display).
     scale: f32,
@@ -113,6 +141,7 @@ pub const Renderer = struct {
     }
 
     pub fn deinit(self: *Renderer) void {
+        self.atlas.alloc.free(self.frame.cells);
         c.SDL_DestroyTexture(self.atlas_tex);
         self.atlas.deinit();
         self.font.deinit();
@@ -190,7 +219,42 @@ pub const Renderer = struct {
         return .{ .fg = fg, .bg = bg };
     }
 
-    pub fn draw(self: *Renderer, term: *Terminal) void {
+    /// Copy what the next frame will show out of the terminal. Call with the
+    /// terminal mutex held; this is the only part of a frame that needs it.
+    ///
+    /// On allocation failure the previous frame is kept, so a redraw can be
+    /// skipped but never drawn from a half-copied grid.
+    pub fn snapshot(self: *Renderer, term: *Terminal) !void {
+        const rows = @min(term.rows, self.gridSize().rows);
+        const cols = term.cols;
+        if (self.frame.cells.len != rows * cols) {
+            const cells = try self.atlas.alloc.alloc(grid.Cell, rows * cols);
+            self.atlas.alloc.free(self.frame.cells);
+            self.frame.cells = cells;
+        }
+        self.frame.cols = cols;
+        self.frame.rows = rows;
+        for (0..rows) |y| {
+            @memcpy(self.frame.cells[y * cols ..][0..cols], term.viewRow(y));
+        }
+
+        self.frame.cursor = null;
+        if (!term.modes.cursor_visible) return;
+        // Scrolled back into history, the cursor isn't where you're looking.
+        if (term.view_offset != 0) return;
+        if (term.cursor.y >= rows or term.cursor.x >= cols) return;
+        self.frame.cursor = .{
+            .x = term.cursor.x,
+            .y = term.cursor.y,
+            .cell = term.screen().at(term.cursor.x, term.cursor.y).*,
+        };
+    }
+
+    /// Render the last snapshot and present it. Call with the terminal mutex
+    /// released: this is where the frame waits for vblank, and nothing in it
+    /// touches the terminal.
+    pub fn draw(self: *Renderer) stats.FrameTimes {
+        const t0 = stats.nowNs();
         self.setDrawColor(self.theme.bg);
         _ = c.SDL_RenderClear(self.sdl);
 
@@ -198,10 +262,10 @@ pub const Renderer = struct {
         const ch: f32 = @floatFromInt(self.font.metrics.cell_h);
         const ox: f32 = @floatFromInt(self.pad_px);
         const oy: f32 = @floatFromInt(self.pad_px);
-        const rows = @min(term.rows, self.gridSize().rows);
+        const frame = &self.frame;
 
-        for (0..rows) |y| {
-            const row = term.viewRow(y);
+        for (0..frame.rows) |y| {
+            const row = frame.row(y);
             const ry = oy + @as(f32, @floatFromInt(y)) * ch;
 
             // -- pass 1: background runs -------------------------------
@@ -238,8 +302,10 @@ pub const Renderer = struct {
             }
         }
 
-        self.drawCursor(term, ox, oy, cw, ch);
+        self.drawCursor(ox, oy, cw, ch);
+        const t1 = stats.nowNs();
         _ = c.SDL_RenderPresent(self.sdl);
+        return .{ .build = t1 - t0, .present = stats.nowNs() - t1 };
     }
 
     fn drawGlyph(self: *Renderer, cell: grid.Cell, px: f32, py: f32, fg: grid.Rgb) void {
@@ -313,14 +379,11 @@ pub const Renderer = struct {
         );
     }
 
-    fn drawCursor(self: *Renderer, term: *Terminal, ox: f32, oy: f32, cw: f32, ch: f32) void {
-        if (!term.modes.cursor_visible) return;
-        // Scrolled back into history, the cursor isn't where you're looking.
-        if (term.view_offset != 0) return;
-        if (term.cursor.y >= term.rows or term.cursor.x >= term.cols) return;
+    fn drawCursor(self: *Renderer, ox: f32, oy: f32, cw: f32, ch: f32) void {
+        const cursor = self.frame.cursor orelse return;
 
-        const px = ox + @as(f32, @floatFromInt(term.cursor.x)) * cw;
-        const py = oy + @as(f32, @floatFromInt(term.cursor.y)) * ch;
+        const px = ox + @as(f32, @floatFromInt(cursor.x)) * cw;
+        const py = oy + @as(f32, @floatFromInt(cursor.y)) * ch;
         var box = c.SDL_FRect{ .x = px, .y = py, .w = cw, .h = ch };
 
         if (!self.focused) {
@@ -335,7 +398,7 @@ pub const Renderer = struct {
         _ = c.SDL_RenderFillRect(self.sdl, &box);
 
         // Redraw the covered character in the cursor's contrast color.
-        const cell = term.screen().at(term.cursor.x, term.cursor.y).*;
+        const cell = cursor.cell;
         if (cell.cp != ' ' and cell.cp != 0) {
             self.drawGlyph(
                 .{ .cp = cell.cp, .attrs = cell.attrs },

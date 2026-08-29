@@ -4,12 +4,20 @@
 //! thread owns the window and draws. A single mutex guards the terminal state
 //! between them. The reader wakes the main thread with an SDL event rather
 //! than having it poll, so an idle terminal uses no CPU at all.
+//!
+//! The main thread holds the mutex only long enough to copy the visible cells
+//! out of the terminal. Drawing and presenting -- which includes the wait for
+//! vblank -- happen after it lets go, so the reader keeps feeding while a
+//! frame is on its way to the display. Wake-ups coalesce for free: the reader
+//! queues at most one wake event, and everything it parses while a frame is
+//! presenting lands in the next one.
 
 const std = @import("std");
 const vt = @import("vt.zig");
 const grid = @import("grid.zig");
 const input = @import("input.zig");
 const render = @import("render.zig");
+const stats = @import("stats.zig");
 const Terminal = @import("terminal.zig").Terminal;
 const Pty = @import("pty.zig").Pty;
 
@@ -52,6 +60,8 @@ const App = struct {
     /// with millions of redundant wakeups.
     wake_queued: std.atomic.Value(bool) = .init(false),
     wake_event: u32 = 0,
+    /// Bytes the reader has pulled off the PTY, for `--frame-stats`.
+    bytes_read: std.atomic.Value(u64) = .init(0),
 
     fn requestWake(self: *App) void {
         if (self.wake_queued.swap(true, .acq_rel)) return;
@@ -80,6 +90,7 @@ fn readerThread(app: *App) void {
         app.parser.feed(&app.term, buf[0..n]);
         app.mutex.unlock();
 
+        _ = app.bytes_read.fetchAdd(n, .monotonic);
         app.requestWake();
     }
     app.running.store(false, .release);
@@ -133,6 +144,9 @@ pub fn main(init: std.process.Init.Minimal) !void {
     var title_buf: [256:0]u8 = undefined;
     var last_title_len: usize = std.math.maxInt(usize);
     var font_size = opts.font_size;
+
+    var frame_stats = stats.FrameStats.init(opts.frame_stats);
+    defer frame_stats.reportTotals(app.bytes_read.load(.monotonic));
 
     while (app.running.load(.acquire)) {
         var ev: c.SDL_Event = undefined;
@@ -193,6 +207,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         // Anything the terminal wants to tell the child (cursor reports,
         // device attributes) goes back down the PTY here.
         app.mutex.lock();
+        const t_lock = stats.nowNs();
         if (app.term.replies.items.len > 0) {
             app.pty.writeAll(app.term.replies.items) catch {};
             app.term.replies.clearRetainingCapacity();
@@ -209,8 +224,25 @@ pub fn main(init: std.process.Init.Minimal) !void {
             renderer.setTitle(title_buf[0..last_title_len :0]);
         }
 
-        if (dirty) renderer.draw(&app.term);
+        // Copy the frame out under the lock; draw and present it after. The
+        // present waits for vblank, and with it inside the lock the reader
+        // could not feed a byte for the whole of every frame.
+        var draw_frame = false;
+        if (dirty) {
+            draw_frame = true;
+            renderer.snapshot(&app.term) catch {
+                draw_frame = false;
+            };
+        }
         app.mutex.unlock();
+        const lock_ns = stats.nowNs() - t_lock;
+
+        if (draw_frame) {
+            var times = renderer.draw();
+            times.lock = lock_ns;
+            frame_stats.record(times);
+        }
+        frame_stats.maybeReport(app.bytes_read.load(.monotonic));
 
         if (app.pty.exited()) app.running.store(false, .release);
     }
@@ -363,6 +395,7 @@ fn mapKey(k: c.SDL_Keycode) ?input.Key {
 const Options = struct {
     font_size: u32 = default_font_size,
     shell: ?[:0]const u8 = null,
+    frame_stats: bool = false,
 };
 
 fn parseArgs(argv: []const [*:0]const u8) Options {
@@ -380,12 +413,15 @@ fn parseArgs(argv: []const [*:0]const u8) Options {
             i += 1;
             if (i >= argv.len) break;
             opts.shell = std.mem.span(argv[i]);
+        } else if (std.mem.eql(u8, arg, "--frame-stats")) {
+            opts.frame_stats = true;
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             std.debug.print(
                 \\terminator -- a terminal emulator
                 \\
                 \\  --font-size N   point size (default {d})
                 \\  --shell PATH    shell to run (default $SHELL)
+                \\  --frame-stats   print frame timing to stderr once a second
                 \\  -h, --help      this message
                 \\
                 \\Keys:
