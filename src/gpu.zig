@@ -125,6 +125,12 @@ pub const Context = struct {
 
     /// Clear to `clear` and draw the frame. One command buffer, one pass,
     /// one indexed draw.
+    ///
+    /// `clear` is **linear light**, not sRGB: the target is
+    /// `BGRA8Unorm_sRGB` and `MTLClearColor` is written through the same
+    /// encode as everything else, with no shader in between to convert it.
+    /// Vertex colours, by contrast, arrive sRGB-encoded and are linearised
+    /// in `shader.metal`.
     pub fn draw(
         self: *Context,
         clear: [3]f32,

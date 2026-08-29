@@ -15,6 +15,14 @@
 //! there is one -- is a consumer of the result rather than the render target.
 //! That is what lets the gallery run with no window server at all.
 //!
+//! That texture is `BGRA8Unorm_sRGB`, so the hardware blends in linear light:
+//! it decodes the destination, adds, and encodes the result on write. Colours
+//! in this file are sRGB bytes over 255 all the way to the GPU -- the shader
+//! linearises the ones on the vertices, and `draw` linearises the clear
+//! colour, which never passes through a shader. Alpha is never converted:
+//! glyph coverage is linear already, and that is what makes the blend correct
+//! rather than merely different.
+//!
 //! A frame is drawn in two steps that run under different locking rules.
 //! `snapshot` copies the visible cells out of the terminal and must be called
 //! with the terminal mutex held; `draw` renders that copy and presents it, and
@@ -74,8 +82,9 @@ pub const Frame = struct {
     }
 };
 
-/// A colour on the vertices: straight alpha, 0..1 per channel. The shader
-/// premultiplies.
+/// A colour on the vertices: **sRGB-encoded**, straight alpha, 0..1 per
+/// channel. The shader linearises the colour and premultiplies it; alpha is
+/// coverage and stays linear throughout.
 const Color = struct { r: f32, g: f32, b: f32, a: f32 };
 
 /// Texture coordinate of the centre of the atlas's reserved white texel.
@@ -462,9 +471,22 @@ pub const Renderer = struct {
         // -- submit --------------------------------------------------------
         // One call: the clear is the render pass's load action rather than a
         // draw of its own, which is why this reads 1 where SDL's path read 2.
+        //
+        // The clear colour is linearised here and the vertex colours are
+        // not, which looks inconsistent and is not: the render target is
+        // `BGRA8Unorm_sRGB`, so everything written to it is sRGB-encoded by
+        // the hardware, and every colour must therefore arrive linear.
+        // Vertex colours reach the target through the shader, which does
+        // the conversion; the clear colour goes straight into
+        // `MTLClearColor` and would otherwise be stored far too light --
+        // the theme's own background, over most of the screen.
         const bg = fcolor(self.theme.bg);
         if (self.gpu.draw(
-            .{ bg.r, bg.g, bg.b },
+            .{
+                theme.srgbToLinear(bg.r),
+                theme.srgbToLinear(bg.g),
+                theme.srgbToLinear(bg.b),
+            },
             self.verts.items,
             self.indices.items,
         )) {

@@ -76,7 +76,7 @@ if no, it is logic and lives in Zig.
 
 ## The sprints
 
-### D0 — Own the GPU path (one to two weeks) — **the first half is done**
+### D0 — Own the GPU path (one to two weeks) — **done**
 
 Replace SDL's 2D renderer with Metal, behind SDL's window. SDL3 hands us
 a `CAMetalLayer` for any window (`SDL_Metal_CreateView`,
@@ -97,8 +97,15 @@ reads 1.
 same non-sRGB drawable format, same blend — and the gallery proves it.
 The second flips the drawable to `BGRA8Unorm_sRGB`, which makes the
 hardware blend in linear light: that is [X1](experience.md)'s
-gamma-correct text, obtained by changing one enum, with the gallery diff
+gamma-correct text, ~~obtained by changing one enum~~, with the gallery diff
 showing exactly what moved.
+
+*Correction, measured:* **it is not one enum.** An `_sRGB` attachment also
+*encodes* everything the pipeline writes, so the vertex colours must be
+linearised in the shader and the clear colour on the Zig side, or every
+solid colour on screen goes pale — `colors-14pt-1x` moves 39.96% of its
+pixels if only the format is flipped. Three changes, and the sprint record
+has the mutants that say so.
 
 *Why here:* the smallest swap on this page with the largest downstream
 effect. X1 needs a shader SDL cannot give us; D4 needs the layer to be
@@ -117,8 +124,22 @@ SDL drawing call. Windowed output is pixel-identical to the SDL build across
 all eleven gallery scenes — **0 differing pixels**, not a tolerance. `gpu.m`
 came to 396 lines, nine under the 400-line rule, which is close enough that
 the rule earned its keep. `build` and `drawable` are within noise of
-the SDL numbers at both geometries and `calls` reads 1. The sRGB flip is
-still to come. See [the record](completed/sprint-d0-gpu-path.md).
+the SDL numbers at both geometries and `calls` reads 1.
+See [the record](completed/sprint-d0-gpu-path.md).
+
+*Result, second commit:* the drawable, the offscreen target and the
+pipeline's colour attachment are `BGRA8Unorm_sRGB`, the shader linearises
+vertex colours and `render.zig` linearises the clear colour, and the
+hardware blends in linear light. Both `colors` captures stayed at **0
+differing pixels** — solid fills round-trip decode→encode exactly — while
+every capture containing text moved by 1.8–7.4% of pixels at a worst channel
+delta of 46–53, entirely on antialiased edges, every one of them *lighter*.
+Measured as linear-light ink, the renderer had been laying down **70–89% of
+the coverage the rasterizer produced**, worst at 10pt 1×; it now lays down
+all of it, which is why light-on-dark text looked thinner here than in a
+native app. Reverse video pays about 9% the other way, and `dim` is
+deliberately not retuned — it is still a lerp in sRGB byte space, and that
+is [X1](experience.md)'s. `build`, `drawable` and `calls` are unmoved.
 
 *Gate check, measured before starting:* the risk was mis-stated, and the
 plan above needs one change.

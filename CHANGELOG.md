@@ -88,6 +88,26 @@ All notable changes to this project are documented here. The format follows
   1× and 2×; the nine scenes containing text moved by 1.8–5.9% of pixels at a
   worst channel delta of 4, entirely on antialiased glyph edges — software
   rounding replaced by GPU rounding.
+- **Text is blended in linear light.** The render target, the pipeline's
+  colour attachment and the `CAMetalLayer` are `BGRA8Unorm_sRGB`, so the
+  hardware decodes, blends and re-encodes; the shader linearises vertex
+  colours and `render.zig` linearises the clear colour, because an sRGB
+  attachment encodes everything written to it. Antialiased glyph edges were
+  previously laying down **70–89% of the coverage the rasterizer produced**,
+  worst at small sizes — measured as linear-light ink over the `typography`
+  captures at 10, 14 and 20 pt. They now lay down all of it, so light text on
+  the dark theme reads at its intended weight rather than thin and grey.
+  Reverse-video text, dark on light, is the other side of the same
+  correction and gets about 9% lighter.
+- The gallery references were re-recorded again for it: `colors` stayed at
+  **0 differing pixels** at both scales — solid fills round-trip
+  decode→encode exactly — while the twelve captures containing text moved by
+  1.8–7.4% of pixels at a worst channel delta of 46–53. Every differing pixel
+  is an antialiased edge and every one got lighter; no solid-fill interior
+  moved anywhere.
+- The `dim` attribute is **not** retuned. Its colour is still a lerp in sRGB
+  byte space and is byte-for-byte what it was; only its glyph edges moved,
+  like every other glyph's. Retuning it belongs to X1.
 
 ### Added
 

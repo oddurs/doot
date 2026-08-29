@@ -11,7 +11,7 @@ performance rule is that a claim carries a number or it is a guess; nothing
 above the renderer has a number, so visual work is judged by pictures
 instead.
 
-Eleven captures render one canonical screen each through the real parser,
+Fourteen captures render one canonical screen each through the real parser,
 grid and renderer, and are compared pixel by pixel against a committed PNG.
 
 ## What it measures
@@ -96,7 +96,7 @@ taken from the final frame, so nothing needs to sleep. Add a row to
 commit the PNG along with the change that made it necessary.
 
 Keep captures small. They are committed and they stay in the history: the
-eleven here are 172 KB in total.
+fourteen here are 228 KB in total.
 
 ## When the references need regenerating
 
@@ -124,3 +124,16 @@ of 4. Every one of those differing pixels is an antialiased glyph edge; no
 solid-fill interior moved. The references now carry GPU rounding rather than
 SDL's software renderer's integer truncation, which is what a user with a
 window open was seeing all along.
+
+D0's second commit — the sRGB drawable, which makes the hardware blend in
+linear light — re-recorded them once more, and the two `colors` captures did
+their job a second time. They stayed at **0**, which is the whole reason to
+have them: solid fills round-trip decode→encode, so a zero there says the
+linearisation is right and a non-zero would have said the clear colour or the
+vertex colours had been missed. Every capture containing text moved by
+1.8–7.4% of pixels at a worst channel delta of 46–53, entirely on antialiased
+edges, and **every differing pixel got lighter** — the signature of the
+change, and the thing to check first if this is ever re-derived. A version
+that linearises glyph coverage as if it were colour also leaves `colors` at 0
+and moves the same edges, but moves them *darker*; the direction is what
+tells the two apart, not the count.
