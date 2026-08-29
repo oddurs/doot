@@ -93,6 +93,8 @@ frame mechanism as selection, and the current match scrolls into view.
 Regex is a later flag, not the default.
 
 *Why here:* after E1, whose highlight path and line identity it reuses.
+This is search over the live view; [L2](record.md) extends the same bar
+and the same highlight path over every session and every moment.
 
 *Done when:* a search over 10,000 lines × 200 columns returns its first
 match in under 10 ms — the full-grid scan is ~0.7 ns/cell, so 2 M cells
@@ -116,7 +118,11 @@ properties.
 
 *Gate:* first fix the discard — a width change must re-wrap or at least
 copy scrollback, never drop it. That is a one-week fix and it is worth
-doing on its own. Then measure re-wrapping 10,000 lines at 200 columns.
+doing on its own. Then note what [L1](record.md) changes: once
+scrollback is a view of the record, reflow is re-materializing that
+view at a new width from the log, which needs no new data structure at
+all — the re-wrap cost is the replay cost, already measured. If L1
+lands first, this sprint shrinks to the discard fix plus a view. Then measure re-wrapping 10,000 lines at 200 columns.
 If it fits in one frame at 120 Hz (8 ms), the simple approach ships and
 the data-structure change is retired. If it does not, reflow becomes
 incremental — visible rows first — and the structure question reopens

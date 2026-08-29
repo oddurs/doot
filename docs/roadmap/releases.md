@@ -126,6 +126,8 @@ GitHub milestone with the sprint issues attached:
 | 0.5 | our window | D4, D5 + P0 | SDL is gone; one binary; an app anyone can install. **The first release worth telling people about.** |
 | 0.6 | prompts | A3, E2 | The terminal knows what each command did. |
 | 0.7 | tabs | A5, E5, X1 | Several agents, one window. |
+| 0.8 | the record | L0, L1, L2 | Every session is recorded; scroll back into a closed `vim`; search a moment. |
+| 0.9 | the transcript | L3, X9, A7, L4 | Commands as objects; the supervisor view; a session as a file you can send. |
 
 **1.0 is a set of conditions, not a date:**
 

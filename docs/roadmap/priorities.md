@@ -27,6 +27,16 @@ libc and the operating system's own frameworks. Everything else is a test
 oracle the binary never loads. [dependencies.md](dependencies.md) is the
 plan; the README's "nothing else is borrowed" is the claim it makes true.
 
+And one concept under all four:
+
+**The record.** The terminal is not a screen; it is an append-only,
+time-indexed log of every byte in and out of every session, and the
+screen is a view of it. Replay, search, the structured transcript, a
+session as a file, the window as an ephemeral client — each is one
+consequence of that decision, and the deterministic `std`-only core is
+what makes it cheap. [record.md](record.md) states the concept and
+sequences it; its first sprint is the proof, and is gated on nothing.
+
 Each priority has its own roadmap and its own arbiter — the thing that
 decides whether a sprint is done. A claim without one is labelled a guess.
 
@@ -44,6 +54,7 @@ decides whether a sprint is done. A claim without one is labelled a guess.
 | [security.md](security.md) | The threat model, the reply policy, paste guard, memory safety in release, the build you can check | The policy table and the fuzzer | S |
 | [testing.md](testing.md) | The layers, the differential model, fuzzing, replay, gating the bench, CI hygiene | CI under five minutes with every arbiter in it | T |
 | [compatibility.md](compatibility.md) | Linux, Windows, the browser; what "platform" means on each; the program matrix | The CI matrix and the compatibility matrix | M |
+| [record.md](record.md) | The log as the primary object: recording, checkpoints and seek, search over time, the transcript, sessions as files, the window as a client | Materialization — any screen reproduced from the log, bit-identical | L |
 
 ## The one rule, generalised
 
@@ -78,6 +89,12 @@ one this repository has already had twice
      └──► E3 search          E5 config ──► X4 theme, E6 keys
 
  C0 harness ──► C1 sequences, C2 unicode ──► C3 terminfo
+
+ L0 record ──► L1 seek ──► L2 search, L4 files ──► M4 player ──► W5 player page
+                 │
+ A3 prompts ────►┴──► L3 transcript ──► X9 structured views, A7 supervisor
+                                                                  │
+ L0, L1 (a month of use) ──► L5 daemon ◄──── A6 remote ◄──────────┘
 ```
 
 Three primitives are shared by several sprints and are called out in each
@@ -119,20 +136,21 @@ unmade by moving A3 up to row 5.
 |---|---|---|
 | 1 | X0 — the gallery | One week. Every D sprint below is judged by it; D0 cannot start without it. |
 | 2 | A0 — agent corpus and protocol audit | One week, parallel-safe with X0. Turns every agentic claim into a table entry, and hands the bench an `agent` corpus. |
-| 3 | D0 — own the GPU path | The first `.m` file, the glue-only convention, and X1's shader — behind SDL's window, pixel-identical first. |
-| 4 | E1 — selection and copy | The biggest gap in the README. Builds the `wrapped` flag and stable line ids three other sprints need. |
-| 5 | D1 — own the rasterizer | FreeType out, by differential test. X2's fallback chain is a list of faces this loads. |
-| 6 | A2 — the modern-TUI protocol | Synchronized output, cursor shape, colour queries, the `CSI u` fix. Agent TUIs flicker and mis-key without them. |
-| 7 | D2 + X2 — colour glyphs, atlas pages, fallback, drawn box glyphs | Emoji and Nerd Font icons currently vanish. One sprint now that D1 exists. |
-| 8 | A1 — attention | `bell` is set and never read. The first `shell.m` function, and the C-ABI proof D4 wants. |
-| 9 | D4 — own the window | SDL out. Brings X5's titlebar and menu, X3's trackpad scrolling, X4's appearance and the 1×/2× fix as properties rather than shims. |
-| 10 | D5 + P0 — one binary, the bundle | `otool -L` shows only `/System`. The moment a second person should try it. |
-| 11 | A3 — semantic prompts | The agentic keystone: command boundaries, running state, "idle at a prompt while unfocused". |
-| 12 | E2 — mouse reporting | A week. Tracked but never forwarded; unblocks A4 and every mouse-driven TUI. |
+| 3 | L0 — record every session | Two weeks, gated on nothing: the proof of the concept, with its privacy shape complete. The `lock` column must not move. |
+| 4 | D0 — own the GPU path | The first `.m` file, the glue-only convention, and X1's shader — behind SDL's window, pixel-identical first. |
+| 5 | E1 — selection and copy | The biggest gap in the README. Builds the `wrapped` flag and stable line ids three other sprints need. |
+| 6 | L1 — checkpoints and seek | Scroll back into a closed `vim`. The moment the concept is visible; if it is not, L retires here. |
+| 7 | D1 — own the rasterizer | FreeType out, by differential test. X2's fallback chain is a list of faces this loads. |
+| 8 | A2 — the modern-TUI protocol | Synchronized output, cursor shape, colour queries, the `CSI u` fix. Agent TUIs flicker and mis-key without them. |
+| 9 | D2 + X2 — colour glyphs, atlas pages, fallback, drawn box glyphs | Emoji and Nerd Font icons currently vanish. One sprint now that D1 exists. |
+| 10 | A1 — attention | `bell` is set and never read. The first `shell.m` function, and the C-ABI proof D4 wants. |
+| 11 | D4 — own the window | SDL out. Brings X5's titlebar and menu, X3's trackpad scrolling, X4's appearance and the 1×/2× fix as properties rather than shims. |
+| 12 | A3 — semantic prompts | The agentic keystone, and now the source of L3's marks: command boundaries, running state, "idle at a prompt while unfocused". |
 
-After that: X1 typography (the format flip already happened in D0; this
-is faces and metrics), E5 config, A5 tabs, C1 sequences, P1 signing — in
-whichever order the previous twelve have made most urgent.
+After that: D5 + P0 (one binary, the bundle — the moment a second person
+should try it), L3 the transcript, A7 the supervisor view, E2 mouse, X1
+typography, E5 config, A5 tabs, C1 sequences, P1 signing — in whichever
+order the previous twelve have made most urgent.
 
 Five roadmaps run beside the order rather than in it, each with one
 sprint that should happen early because it is short and fences
@@ -169,8 +187,12 @@ Stated so they do not have to be re-decided.
   made, and the core is kept provably portable on every PR
   ([M0](compatibility.md)); the Linux and Windows ports themselves wait
   until the Mac experience is complete ([M2, M3](compatibility.md)).
-- **Not a multiplexer.** Tabs and, later, splits — but sessions live and die
-  with the window. Persistence is a daemon and a different program.
+- **Not a multiplexer, still.** Nothing is tiled and nothing is a pane.
+  But the earlier line — sessions live and die with the window — is
+  withdrawn: under the record, the log is the object and the window is a
+  view, so the log outliving the window ([L5](record.md)) is a
+  consequence, not a multiplexer. It is gated on a month of using L0 and
+  L1 first.
 - **No from-scratch kernel interface, IME, or window system.** Owning the
   code stops at the platform's edge; see the ownership rule in
   [dependencies.md](dependencies.md).

@@ -114,7 +114,11 @@ exists with at least one file in it (there will be one).
 
 A `replay` mode of the headless terminal ([C0](correctness.md)):
 feed a recording at its recorded timing, or as fast as possible, and
-dump the grid at the end or at marks. Two uses:
+dump the grid at the end or at marks. Under [record.md](record.md) this
+is not a test tool that happens to be useful — it is *materialization*,
+the same code path that produces any screen from the log. The recording
+format is L0's, and the golden checksum T0 asserts is the concept's
+arbiter. Two uses here:
 
 - **TUI smoke tests.** Recordings of `vim`, `less`, `htop`, `tmux` and
   the agent CLIs from [A0](agentic.md) doing a fixed task, each with a

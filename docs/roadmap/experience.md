@@ -270,6 +270,63 @@ within 20% of unshaped.
 
 *Risk:* medium. A cache that must not grow without bound.
 
+### X8 — Accessibility (two weeks)
+
+Every GPU terminal is bad at VoiceOver, because a grid of quads is not
+text to an assistive technology. This one has what the others lack: a
+custom `NSView` ([D4](dependencies.md)) that can adopt
+`NSAccessibility`, and a semantic layer ([A3](agentic.md),
+[L3](record.md)) that knows which rows are a prompt, a command and its
+output.
+
+- Rows exposed as text lines; the cursor as the insertion point; the
+  selection as the selected range.
+- Prompt marks as landmarks and command spans as regions, so a
+  screen-reader user moves by command, not by row.
+- The transcript view ([X9](experience.md)) as its natural accessible
+  form: one heading per command.
+- Reduce-motion and increase-contrast honoured — the former already
+  planned in [X3](experience.md), the latter through
+  [X4](experience.md)'s contrast floor.
+- The minimum-contrast floor and the colour-blind-safe check on the
+  bundled themes are part of the gallery, not a separate audit.
+
+*Why here:* after D4 provides the view and A3 the semantics. Doing it
+before either means doing it twice.
+
+*Done when:* VoiceOver reads a shell session command by command; the
+Accessibility Inspector reports no unlabelled element; a blind
+contributor has tried it and filed what they found.
+
+*Risk:* medium. `NSAccessibility` on a custom view is under-documented;
+the transcript view is the fallback if the grid proves hostile.
+
+### X9 — Structured views (two weeks)
+
+The transcript ([L3](record.md)) rendered beautifully.
+
+- **Folding.** A command folded to one line — name, exit status,
+  duration, line count — that expands in place, with the fold state a
+  property of the view, not the record.
+- **Diffs as diffs.** A unified diff detected in a span gets a gutter,
+  line numbers, per-hunk fold, and the theme's diff colours. Agents
+  print diffs constantly.
+- **Tables aligned**, when a span is detected as columnar output.
+- **The timeline** ([L1](record.md)'s scrubber) drawn in the padding as
+  a thin bar with command boundaries ticked on it.
+
+Everything here is a *view*: switch it off and the plain grid is what it
+always was.
+
+*Why here:* after L3 exists to render.
+
+*Done when:* an agent session from the A0 corpus, in transcript view, is
+in the gallery at 1× and 2×; a `git diff` in a span renders with a
+gutter; toggling the view is one keystroke and one frame.
+
+*Risk:* low. Detection false-positives are the risk; the fold shows the
+raw text one keystroke away, always.
+
 ## Why this order
 
 - **X0 first**, for the same reason sprint 0 was — and because
@@ -281,6 +338,8 @@ within 20% of unshaped.
   font work is welcome; its trackpad half gets easier after D4.
 - **X4 waits for a config file**; X5 lands with D4.
 - **X7 is gated** on the fonts people actually run, through D3.
+- **X8 after D4 and A3; X9 after L3.** Both are views of things other
+  sprints build.
 
 ## Not on this plan
 

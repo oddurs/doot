@@ -31,6 +31,9 @@ Four attackers, in the order they matter.
    tab.
 4. **The build.** What lands in the release binary and how anyone could
    check.
+5. **Whoever reads the disk.** Once [L0](record.md) records sessions,
+   the record is a new asset: what was printed, and — if the user
+   opted in — what was typed. Its protection is S6.
 
 Not an attacker: the user at the keyboard. `--shell`, `--screenshot`
 and `--font` take what they are given; if you can pass arguments you
@@ -213,10 +216,40 @@ minimal set, and the release notes quote it.
 
 *Risk:* none.
 
+### S6 — The record's privacy (with L0, then per sprint)
+
+[record.md](record.md) specifies the privacy shape; S6 holds it as
+policy with a test per line, landing with L0 and re-run by every L
+sprint.
+
+| Rule | Test |
+|---|---|
+| Output recorded by default; **input never by default** | a fresh config records a session; the file contains no `input` event |
+| Input recording is per-tab, opt-in, indicated | enabling it flips the indicator in the same frame; disabling stops the events in the same frame |
+| An incognito tab writes nothing | the sessions directory is unchanged after an incognito session |
+| Files are 0600 in a 0700 directory | `stat` in the e2e test |
+| Retention is a config key with a default in days | a session older than the default is gone after the next launch |
+| Deletion is real | after delete, no file and no index entry contains the session id |
+| Export redacts | every fixture secret — tokens, keys, the `Authorization:` header shapes — is replaced in the exported file |
+| Nothing leaves the machine | the app makes no network request other than [P3](platform.md)'s, asserted the same way |
+| The remote socket reads the record under the same token | [S4](security.md)'s test extended to `follow` and `log` |
+
+Encryption at rest is deliberately not here: FileVault is the platform's
+answer, and a second key the user must manage is a way to lose the
+record, not protect it. The docs say so.
+
+*Done when:* the table's tests run in CI; `SECURITY.md` links the
+record's privacy section.
+
+*Risk:* none in code. The risk is a default drifting in a later sprint,
+which is what the tests are for.
+
 ## Why this order
 
 - **S0 before A2 and C1**, so the first new replies are written against
   a policy instead of becoming one.
+- **S6 with L0**, not after it. A recorder that ships before its
+  privacy tests is a recorder that ships without them.
 - **S1 early** because the paste guard closes the one attack a user can
   meet today, and it is a week.
 - **S2 gated on a number** the bench can give in an afternoon.
