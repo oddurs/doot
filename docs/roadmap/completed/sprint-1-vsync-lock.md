@@ -90,6 +90,21 @@ means [Sprint 4](../performance.md) — the printable-run fast path — will
 show up directly in this measurement, not only in the headless bench. That
 is the attribution the roadmap said this sprint had to make possible.
 
+## Follow-up: a defect this record did not catch
+
+Code review of the merged sprints found that `main.zig` clears `term.dirty`
+*before* attempting the snapshot, so when the snapshot's allocation fails
+the `catch` skips the frame and nothing sets the flag again — on an idle
+terminal the child's last line would stay invisible until the user typed.
+The doc comment written here for `snapshot` ("a redraw can be skipped but
+never drawn from a half-copied grid") was therefore too generous to itself:
+skipping was permanent, not per-iteration. Fixed by restoring `dirty` inside
+the `catch`, still under the lock.
+
+`snapshot` itself was correct on that path — it allocates before freeing and
+assigns `cols`/`rows` only after the `try` — so there was never a dangling
+buffer or a half-copied frame.
+
 ## What the timer sees that the bench does not
 
 The `build` column occasionally spikes to ~8 ms in the first second of a run
