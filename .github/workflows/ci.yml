@@ -23,7 +23,7 @@ jobs:
     name: zig fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
@@ -55,7 +55,7 @@ jobs:
         os: [macos-15, macos-14]
         optimize: [Debug, ReleaseFast]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install SDL3 and FreeType
         run: |
@@ -84,7 +84,7 @@ jobs:
     # on a quiet machine, remains the number to beat.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: mlugg/setup-zig@v2
         with:
@@ -123,7 +123,7 @@ jobs:
     # the percentages.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install SDL3 and FreeType
         run: |
@@ -151,7 +151,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: gallery-renders
           path: bench/gallery/current/*.png
