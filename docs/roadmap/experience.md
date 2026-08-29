@@ -170,11 +170,12 @@ line assumption in `snapshot`; the fix is one more row, not a redesign.
 
 ### X4 — Colour and theme (two weeks)
 
-- **Theme files** in the config format [E5](essentials.md) chooses. Two
-  bundled themes, one dark and one light, *designed* — contrast checked,
-  ANSI colours distinct from each other at small sizes — rather than
-  copied from a popular scheme. The current dark palette is the starting
-  point.
+- **Theme files** in the config format — a theme is a config file that
+  sets only colour keys, found by `theme = name`; the format and lookup
+  are [K3](config.md). Two bundled themes, one dark and one light,
+  *designed* — contrast checked, ANSI colours distinct from each other
+  at small sizes — rather than copied from a popular scheme. The current
+  dark palette is the starting point.
 - **Follow the system.** `SDL_GetSystemTheme` reports it; switch on the
   theme-changed event and re-answer OSC 10/11 queries so TUIs follow.
 - **OSC 4 / 10 / 11 / 12 / 17 / 19** set and reset, so an app can adopt or
@@ -336,7 +337,7 @@ raw text one keystroke away, always.
   X2 rides on D1 and D2, which build the multi-face plumbing X1 needs.
 - **X3 is independent** and can be pulled forward whenever a break from
   font work is welcome; its trackpad half gets easier after D4.
-- **X4 waits for a config file**; X5 lands with D4.
+- **X4 waits for [K0](config.md)**; X5 lands with D4.
 - **X7 is gated** on the fonts people actually run, through D3.
 - **X8 after D4 and A3; X9 after L3.** Both are views of things other
   sprints build.

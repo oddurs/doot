@@ -145,7 +145,7 @@ target that covers it. Everything else ships safe.
 
 Either way, this sprint adds `ReleaseSafe` to CI, and hands
 [testing.md](testing.md)'s T1 its list of fuzz targets: `vt.Parser`,
-`Terminal` operations, the config parser ([E5](essentials.md)), the
+`Terminal` operations, the config parser ([K0](config.md)), the
 font parser ([D1](dependencies.md)), the PNG decoder
 ([D2](dependencies.md)), the GSUB reader ([D3](dependencies.md)), and
 the remote-control protocol ([A6](agentic.md)). Every parser of bytes

@@ -136,34 +136,19 @@ and `scroll` still reads flat.
 *Risk:* high. Sprint R's ring made rows non-adjacent in memory; reflow is
 the first thing since to want to walk them all at once.
 
-### E5 — Configuration (one week)
+### E5 — Configuration — **moved**
 
-`~/.config/terminator/config`, flat `key = value`, one per line, `#`
-comments — no dependency, a hundred lines of parser, and the format kitty
-and Ghostty converged on. Keys for everything a flag sets today, plus font
-family, theme, padding, scrollback lines, cursor style, bell behaviour,
-copy-on-select, minimum contrast, and the keybindings E6 adds.
-
-Reloaded on focus gain, which costs nothing while idle, and on `Cmd ,`.
-Errors are reported once, on the first frame, in the grid — a line
-number and what was wrong — not to a stderr nobody is watching. `Cmd ,`
-with no config file writes a commented template and opens it.
-
-*Why here:* themes ([X4](experience.md)), keybindings (E6) and cursor
-style ([X3](experience.md)) all need somewhere to live, and each was
-about to invent its own.
-
-*Done when:* every `--flag` has a key, `--help` lists the keys, and a
-unit test round-trips a template through the parser. A malformed line
-shows in the grid on launch.
-
-*Risk:* low.
+This became its own roadmap, [config.md](config.md): the one-struct
+source of truth (K0), error reporting and `+show-config` (K1), `Cmd ,`
+opening the file in a tab (K2), and themes and keybinds as config (K3,
+K4). The sprints here that wanted a key — E6, E7 — get it from K0.
 
 ### E6 — Keybindings and input completeness (one to two weeks)
 
 - **An action table** — `new_tab`, `copy`, `paste`, `font_bigger`,
-  `search`, `scroll_page_up`, `send_text` — bound in the config, with the
-  current defaults as the shipped set.
+  `search`, `scroll_page_up`, `text:` — with the current defaults as
+  the shipped set. The binding syntax and `+list-keybinds` are
+  [K4](config.md); this sprint owns the actions and what they do.
 - **`Option` as Meta or as composition**, per side, configurable — the
   question every Mac terminal has to answer. Verify what happens today
   when `Option B` produces both a `TEXT_INPUT` of `∫` and an `ESC b` from
@@ -209,7 +194,8 @@ view offset is unchanged; the indicator is in the gallery.
 - **E1 first** because it is most missed and because the `wrapped` flag
   and line identity unblock E3, E4 and two agentic sprints.
 - **E2 is a week** and unblocks [A4](agentic.md).
-- **E5 before E6, X3 and X4**, so none of them invent a config format.
+- **K0 ([config.md](config.md)) before E6, X3 and X4**, so none of them
+  invent a config format.
 - **E4 gated and late.** The discard bug is fixed first and alone; the
   full reflow waits for a number.
 - **E7 whenever a week is free.** The snap fix should not wait for its
