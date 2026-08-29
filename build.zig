@@ -167,6 +167,21 @@ pub fn build(b: *std.Build) void {
     const record_step = b.step("record", "Record a command's terminal output as a corpus");
     record_step.dependOn(&record_run.step);
 
+    // The corpus guard: a committed recording must not carry a secret.
+    // The check is "redacting it changes nothing", using the same
+    // redact.zig the recorder applies at capture time.
+    const check_mod = b.createModule(.{
+        .root_source_file = b.path("src/check_corpora.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const check_exe = b.addExecutable(.{ .name = "check-corpora", .root_module = check_mod });
+    const check_run = b.addRunArtifact(check_exe);
+    check_run.has_side_effects = true;
+    const check_step = b.step("check-corpora", "Fail if a committed corpus carries a secret");
+    check_step.dependOn(&check_run.step);
+
     // End-to-end tests drive a real shell on a real PTY, so they live in
     // their own root and get their own module.
     const e2e_mod = b.createModule(.{

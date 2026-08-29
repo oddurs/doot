@@ -16,4 +16,5 @@ test {
     _ = @import("cli.zig");
     _ = @import("version.zig");
     _ = @import("png.zig");
+    _ = @import("redact.zig");
 }

@@ -36,6 +36,14 @@ jobs:
       - name: Test the release scripts
         run: ./scripts/test-changelog-section.sh
 
+      # Gating, unlike the bench and the gallery. A corpus is a recording
+      # of a real program, and a real program prints whatever it prints --
+      # the first pair of these reached a public repository carrying live
+      # session links. This is the half that does not rely on anyone
+      # remembering to look.
+      - name: Check the corpora carry no secrets
+        run: zig build check-corpora
+
   test:
     name: ${{ matrix.optimize }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
