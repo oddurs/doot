@@ -33,7 +33,8 @@ assert on the resulting screen.
 | `Cmd K` | clear |
 | wheel | scroll history, or arrow keys on the alternate screen |
 
-Flags: `--font-size N`, `--shell PATH`.
+Flags: `--font-size N`, `--shell PATH`, `--frame-stats` (frame timing to
+stderr, once a second).
 
 ## How it fits together
 
@@ -54,10 +55,13 @@ PTY ──► vt.Parser ──► Terminal ──► Renderer ──► SDL3 ─
 | `input.zig` | Keys to bytes. Application cursor mode, xterm modifier params, the lot. |
 | `theme.zig` | 16 ANSI colors plus the generated xterm cube and grayscale ramp. |
 | `main.zig` | Reader thread, event loop, the mutex between them. |
+| `stats.zig` | The `--frame-stats` timer: lock hold, build and present per frame. |
 
 Two threads: one reads the PTY and feeds the parser, the main thread draws.
-One mutex between them, and the reader wakes the main thread with an SDL event
-rather than having it poll — so an idle terminal uses no CPU.
+One mutex between them, held by the main thread only long enough to copy the
+viewport out — drawing and the vblank wait happen after it lets go. The reader
+wakes the main thread with an SDL event rather than having it poll, so an idle
+terminal uses no CPU.
 
 ## Not done yet
 

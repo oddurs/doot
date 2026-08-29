@@ -25,6 +25,10 @@ zig build bench                   # performance, always ReleaseFast
 zig fmt build.zig src/            # before every commit
 ```
 
+For anything above the parser — lock contention, frame build, present — the
+bench is blind; run the app with `--frame-stats` instead (see
+[docs/benchmarking.md](docs/benchmarking.md)).
+
 `zig build bench` needs neither SDL nor a window — `vt`, `grid` and
 `terminal` import nothing but `std`. `bench/baseline.txt` is the number to
 beat. See [docs/benchmarking.md](docs/benchmarking.md) for what it measures,

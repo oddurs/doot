@@ -1,0 +1,165 @@
+//! Frame timing for the running app: the numbers `zig build bench` cannot
+//! produce.
+//!
+//! The bench is headless, so the mutex is never contended there and no frame
+//! is ever presented. Whether the reader thread is starved by the display,
+//! and how long a frame takes to build against how long it waits for vblank,
+//! can only be measured with a window open. This is that measurement, printed
+//! to stderr once a second while `--frame-stats` is on, with a totals line at
+//! exit.
+//!
+//! Per frame, three intervals:
+//!
+//!   lock      how long the main thread held the terminal mutex. The reader
+//!             cannot feed a byte while this is non-zero, so it is the number
+//!             that decides bulk-output throughput.
+//!   build     from the lock being released to the frame being submitted --
+//!             vertex generation and draw calls.
+//!   present   the wait for vblank inside SDL_RenderPresent.
+//!
+//! Before Sprint 1 of docs/roadmap/performance.md, `present` happened inside
+//! `lock`, and the lock column was the whole frame.
+
+const std = @import("std");
+
+pub fn nowNs() u64 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
+const report_every_ns: u64 = 1_000_000_000;
+
+/// Sum and max over a window, reported as average and worst case. The
+/// average says what a frame usually costs; the max is the stall a user
+/// would notice.
+const Interval = struct {
+    sum: u64 = 0,
+    max: u64 = 0,
+
+    fn add(self: *Interval, ns: u64) void {
+        self.sum += ns;
+        self.max = @max(self.max, ns);
+    }
+
+    fn avgUs(self: Interval, n: u64) f64 {
+        if (n == 0) return 0;
+        return @as(f64, @floatFromInt(self.sum / n)) / 1000.0;
+    }
+
+    fn maxUs(self: Interval) f64 {
+        return @as(f64, @floatFromInt(self.max)) / 1000.0;
+    }
+};
+
+pub const FrameTimes = struct {
+    lock: u64 = 0,
+    build: u64 = 0,
+    present: u64 = 0,
+};
+
+pub const FrameStats = struct {
+    enabled: bool = false,
+
+    started: u64 = 0,
+    window_start: u64 = 0,
+    window_bytes_start: u64 = 0,
+
+    frames: u64 = 0,
+    lock: Interval = .{},
+    build: Interval = .{},
+    present: Interval = .{},
+
+    total_frames: u64 = 0,
+    /// Worst lock hold over the whole run, not just the last window.
+    total_lock_max: u64 = 0,
+
+    pub fn init(enabled: bool) FrameStats {
+        const now = nowNs();
+        return .{ .enabled = enabled, .started = now, .window_start = now };
+    }
+
+    pub fn record(self: *FrameStats, t: FrameTimes) void {
+        if (!self.enabled) return;
+        self.frames += 1;
+        self.lock.add(t.lock);
+        self.build.add(t.build);
+        self.present.add(t.present);
+        self.total_lock_max = @max(self.total_lock_max, t.lock);
+    }
+
+    /// Print a line if a second has passed. `bytes_read` is the reader
+    /// thread's running total, so the line can say how fast the PTY is
+    /// actually being drained -- the throughput figure the sprint is about.
+    pub fn maybeReport(self: *FrameStats, bytes_read: u64) void {
+        if (!self.enabled) return;
+        const now = nowNs();
+        const elapsed = now - self.window_start;
+        if (elapsed < report_every_ns) return;
+
+        const n = self.frames;
+        std.debug.print(
+            "frame-stats  {d:>4} fps  lock {d:>7.0}/{d:<7.0}  build {d:>6.0}/{d:<6.0}  present {d:>7.0}/{d:<7.0} us  pty {d:>7.2} MiB/s\n",
+            .{
+                n * 1_000_000_000 / elapsed,
+                self.lock.avgUs(n),
+                self.lock.maxUs(),
+                self.build.avgUs(n),
+                self.build.maxUs(),
+                self.present.avgUs(n),
+                self.present.maxUs(),
+                mibPerSec(bytes_read - self.window_bytes_start, elapsed),
+            },
+        );
+
+        self.total_frames += n;
+        self.frames = 0;
+        self.lock = .{};
+        self.build = .{};
+        self.present = .{};
+        self.window_start = now;
+        self.window_bytes_start = bytes_read;
+    }
+
+    /// The whole-run figures. Printed once, at exit, so a scripted run
+    /// (`--shell` pointing at something that dumps output and quits) leaves
+    /// one line that says what happened.
+    pub fn reportTotals(self: *FrameStats, bytes_read: u64) void {
+        if (!self.enabled) return;
+        const elapsed = nowNs() - self.started;
+        const frames = self.total_frames + self.frames;
+        std.debug.print(
+            "frame-stats  total: {d} frames in {d:.2} s, {d} bytes from the pty at {d:.2} MiB/s, worst lock hold {d:.0} us\n",
+            .{
+                frames,
+                @as(f64, @floatFromInt(elapsed)) / 1e9,
+                bytes_read,
+                mibPerSec(bytes_read, elapsed),
+                @as(f64, @floatFromInt(self.total_lock_max)) / 1000.0,
+            },
+        );
+    }
+};
+
+fn mibPerSec(bytes: u64, ns: u64) f64 {
+    if (ns == 0) return 0;
+    const b: f64 = @floatFromInt(bytes);
+    const s: f64 = @as(f64, @floatFromInt(ns)) / 1e9;
+    return b / s / (1024.0 * 1024.0);
+}
+
+const testing = std.testing;
+
+test "intervals report average and worst case" {
+    var iv = Interval{};
+    iv.add(1_000);
+    iv.add(3_000);
+    try testing.expectEqual(@as(f64, 2.0), iv.avgUs(2));
+    try testing.expectEqual(@as(f64, 3.0), iv.maxUs());
+}
+
+test "a disabled timer records nothing" {
+    var s = FrameStats.init(false);
+    s.record(.{ .lock = 1, .build = 1, .present = 1 });
+    try testing.expectEqual(@as(u64, 0), s.frames);
+}

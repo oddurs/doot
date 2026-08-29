@@ -27,8 +27,46 @@ as the parse bottleneck, and it now stands as the regression test for the fix.
 
 Anything above the renderer. The harness is headless, so the mutex is never
 contended and no draw call is ever issued — the vsync-inside-the-lock and
-per-glyph-state-change findings are invisible to it. Those need a frame timer
-in the real app.
+per-glyph-state-change findings are invisible to it. Those need the frame
+timer in the real app, below.
+
+## The frame timer
+
+```sh
+zig build -Doptimize=ReleaseFast
+./zig-out/bin/terminator --frame-stats --shell bench/dump.sh
+```
+
+`--frame-stats` prints one line a second to stderr, and a totals line at exit:
+
+```
+frame-stats   120 fps  lock  2/10  build  202/8326  present  7915/9322 us  pty  47.19 MiB/s
+frame-stats  total: 636 frames in 5.32 s, 257368610 bytes from the pty at 46.18 MiB/s, worst lock hold 324 us
+```
+
+Each column is average/worst over the second, in microseconds:
+
+**`lock`** — how long the main thread held the terminal mutex. The reader
+cannot feed a byte while this is non-zero, so it decides bulk-output
+throughput. Should read in single-digit microseconds; it is one memcpy of the
+viewport.
+
+**`build`** — from releasing the lock to submitting the frame: vertex
+generation and draw calls. What Sprints 2 and 3 move.
+
+**`present`** — the wait for vblank inside `SDL_RenderPresent`. Roughly one
+refresh interval, and it should never appear inside `lock` again.
+
+**`pty`** — how fast the reader is draining the PTY.
+
+`bench/dump.sh` cats the six corpora at the terminal and exits, so pointing
+`--shell` at it makes the app an end-to-end benchmark: real PTY, real parser,
+real frames. `PASSES` sets how many times each corpus is written (default 16,
+which is 24 MiB). A window opens for the duration.
+
+For scale, `script -q /dev/null bench/dump.sh > /dev/null` drains the same
+bytes through a PTY with no terminal attached — the cost of `cat` and the
+kernel's tty layer alone — at roughly 89 MiB/s on an M-series laptop.
 
 ## Reading the numbers
 

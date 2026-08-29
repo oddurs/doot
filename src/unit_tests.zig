@@ -12,4 +12,5 @@ test {
     _ = @import("input.zig");
     _ = @import("theme.zig");
     _ = @import("font.zig");
+    _ = @import("stats.zig");
 }
