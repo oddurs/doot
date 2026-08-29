@@ -102,12 +102,20 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(e2e_tests).step);
 }
 
-/// The short commit `--version` reports, or empty outside a git checkout.
+/// The short commit `--version` reports, or empty when this tree is not
+/// itself a checkout.
 ///
 /// A release tarball is built from an export with no `.git`, and failing
 /// the build over seven characters would be a poor trade -- `--version`
 /// simply prints the number without them.
+///
+/// The `.git` check is not redundant with asking git: `rev-parse` walks
+/// *up* out of the build root, so an unpacked source tarball sitting
+/// inside somebody else's working tree would otherwise be stamped with
+/// their HEAD -- a provenance string pointing at an unrelated commit,
+/// which is worse than none at all.
 fn gitCommit(b: *std.Build) []const u8 {
+    b.build_root.handle.access(b.graph.io, ".git", .{}) catch return "";
     var code: u8 = undefined;
     const out = b.runAllowFail(
         &.{ "git", "-C", b.pathFromRoot("."), "rev-parse", "--short=7", "HEAD" },

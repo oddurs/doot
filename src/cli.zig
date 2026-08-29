@@ -84,6 +84,17 @@ pub const Action = union(enum) {
 };
 
 pub fn parseArgs(argv: []const [*:0]const u8) Action {
+    // A first pass, so that these two really do win over everything else.
+    // The main loop below consumes the token after a value-taking flag, so
+    // `--shell --version` would otherwise take "--version" as the shell
+    // path and go on to open a window and try to exec it. Asking a program
+    // what it is should never open a window.
+    if (argv.len > 1) for (argv[1..]) |raw| {
+        const arg = std.mem.span(raw);
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) return .help;
+        if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-V")) return .version;
+    };
+
     var opts = Options{};
     var i: usize = 1; // skip argv[0]
 
@@ -110,10 +121,6 @@ pub fn parseArgs(argv: []const [*:0]const u8) Action {
                 opts.cols = size.cols;
                 opts.rows = size.rows;
             }
-        } else if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-V")) {
-            return .version;
-        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            return .help;
         }
     }
     return .{ .run = opts };
@@ -201,4 +208,25 @@ test "--help and --version are reported rather than acted on" {
     try testing.expectEqual(Action.version, parseArgs(&ver_short));
     const ver_long = [_][*:0]const u8{ "terminator", "--version" };
     try testing.expectEqual(Action.version, parseArgs(&ver_long));
+}
+
+test "--help and --version win even after a flag that takes a value" {
+    // The regression this guards: the main loop consumes the token after
+    // `--shell`, so these used to be swallowed as a shell path or a size,
+    // and the program opened a window and tried to exec `--version`.
+    const shell = [_][*:0]const u8{ "terminator", "--shell", "--version" };
+    try testing.expectEqual(Action.version, parseArgs(&shell));
+    const size = [_][*:0]const u8{ "terminator", "--size", "--help" };
+    try testing.expectEqual(Action.help, parseArgs(&size));
+    const shot = [_][*:0]const u8{ "terminator", "--screenshot", "-h" };
+    try testing.expectEqual(Action.help, parseArgs(&shot));
+    const font = [_][*:0]const u8{ "terminator", "--font-size", "-V" };
+    try testing.expectEqual(Action.version, parseArgs(&font));
+}
+
+test "argv with no arguments at all is a plain run" {
+    const bare = [_][*:0]const u8{"terminator"};
+    try testing.expectEqual(@as(u32, default_cols), parseArgs(&bare).run.cols);
+    const empty: [0][*:0]const u8 = .{};
+    try testing.expectEqual(@as(u32, default_cols), parseArgs(&empty).run.cols);
 }

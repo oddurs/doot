@@ -36,6 +36,9 @@ test "the version is a semantic version and matches build.zig.zon" {
 
 test "a commit, when there is one, is a short hash" {
     if (commit.len == 0) return; // built outside a checkout
-    try testing.expectEqual(@as(usize, 7), commit.len);
+    // `--short=7` is a *minimum*: git lengthens the abbreviation when
+    // seven hex digits would be ambiguous in this repository, so asserting
+    // exactly seven would fail one day for a reason unrelated to any change.
+    try testing.expect(commit.len >= 7);
     for (commit) |ch| try testing.expect(std.ascii.isHex(ch));
 }

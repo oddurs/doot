@@ -24,18 +24,28 @@ if [ ! -r "$file" ]; then
 fi
 
 # Everything between this version's heading and the next `## ` heading,
-# with blank lines trimmed off both ends. The link-reference block at the
-# bottom of the file starts with `[`, not `## `, so it is excluded by
-# matching only headings -- and by the trailing-blank trim.
+# with blank lines trimmed off both ends.
+#
+# Fences are tracked because a `## ` line inside a code block is content,
+# not a heading -- ending the section there would publish a body cut off
+# mid-fence, and would do it while exiting 0. For a gate, silently wrong
+# content is worse than a hard failure.
+#
+# The link-reference block at the bottom of the file starts with `[`, so
+# it ends the section too. `\r` is tolerated so a CRLF changelog trims the
+# same way a LF one does.
 section=$(
     awk -v want="## [$version]" '
+        function blank(s) { sub(/\r$/, "", s); return s == "" }
         substr($0, 1, length(want)) == want { found = 1; next }
-        found && /^## / { exit }
-        found && /^\[[^]]+\]:/ { exit }
-        found { lines[++n] = $0; if (NF) last = n }
+        !found { next }
+        /^(```|~~~)/ { lines[++n] = $0; last = n; fence = !fence; next }
+        !fence && /^## / { exit }
+        !fence && /^\[[^]]+\]:/ { exit }
+        { lines[++n] = $0; if (!blank($0)) last = n }
         END {
             first = 1
-            while (first <= last && lines[first] == "") first++
+            while (first <= last && blank(lines[first])) first++
             for (i = first; i <= last; i++) print lines[i]
         }
     ' "$file"
