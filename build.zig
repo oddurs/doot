@@ -74,12 +74,48 @@ pub fn build(b: *std.Build) void {
     // a number from today is comparable with one from six months ago. They
     // are embedded rather than opened so the bench does not care where it
     // was invoked from. See bench/gen_corpus.py.
-    const corpus_names = [_][]const u8{ "ascii", "sgr", "scroll", "altscreen", "cjk", "region" };
+    const corpus_names = [_][]const u8{
+        "ascii",        "sgr",          "scroll", "altscreen", "cjk", "region",
+        // Recordings rather than generated: see src/record.zig and A0.
+        "agent-claude", "agent-stream",
+    };
     inline for (corpus_names) |name| {
-        bench_mod.addAnonymousImport("corpus_" ++ name, .{
+        // `-` is not valid in an import name, so the module is named with
+        // an underscore while the file keeps the readable name.
+        const import_name = "corpus_" ++ comptime blk: {
+            var buf: [name.len]u8 = undefined;
+            for (name, 0..) |ch, i| buf[i] = if (ch == '-') '_' else ch;
+            const final = buf;
+            break :blk &final;
+        };
+        bench_mod.addAnonymousImport(import_name, .{
             .root_source_file = b.path("bench/corpus/" ++ name ++ ".bin"),
         });
     }
+
+    // The protocol audit: what the corpora ask a terminal to do, beside
+    // what this one does about it. See src/audit.zig and A0.
+    const audit_mod = b.createModule(.{
+        .root_source_file = b.path("src/audit.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    inline for ([_][]const u8{ "agent-claude", "agent-stream", "altscreen", "sgr", "region" }) |name| {
+        const import_name = "corpus_" ++ comptime blk: {
+            var buf: [name.len]u8 = undefined;
+            for (name, 0..) |ch, i| buf[i] = if (ch == '-') '_' else ch;
+            const final = buf;
+            break :blk &final;
+        };
+        audit_mod.addAnonymousImport(import_name, .{
+            .root_source_file = b.path("bench/corpus/" ++ name ++ ".bin"),
+        });
+    }
+    const audit_exe = b.addExecutable(.{ .name = "audit", .root_module = audit_mod });
+    const audit_run = b.addRunArtifact(audit_exe);
+    const audit_step = b.step("audit", "Audit what the corpora ask a terminal to do");
+    audit_step.dependOn(&audit_run.step);
 
     const bench_exe = b.addExecutable(.{ .name = "bench", .root_module = bench_mod });
     const bench_run = b.addRunArtifact(bench_exe);
@@ -109,6 +145,27 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| gallery_run.addArgs(args);
     const gallery_step = b.step("gallery", "Render the screenshot gallery and diff it");
     gallery_step.dependOn(&gallery_run.step);
+
+    // The recorder. Runs a command on a pty and writes what it emits, so
+    // the agent corpora are recordings rather than a description of what
+    // agent output is imagined to look like.
+    const record_mod = b.createModule(.{
+        .root_source_file = b.path("src/record.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    // pty.zig sets TERM_PROGRAM_VERSION, so it needs the version option.
+    record_mod.addOptions("build_options", options);
+    const record_exe = b.addExecutable(.{ .name = "record", .root_module = record_mod });
+    // Installed as well as runnable through the step: a recording is
+    // usually taken with the agent running in some other directory.
+    b.installArtifact(record_exe);
+    const record_run = b.addRunArtifact(record_exe);
+    record_run.has_side_effects = true;
+    if (b.args) |args| record_run.addArgs(args);
+    const record_step = b.step("record", "Record a command's terminal output as a corpus");
+    record_step.dependOn(&record_run.step);
 
     // End-to-end tests drive a real shell on a real PTY, so they live in
     // their own root and get their own module.

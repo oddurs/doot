@@ -75,6 +75,18 @@ const corpora = [_]Corpus{
         .what = "DECSTBM region + status line (vim/less/tmux)",
         .bytes = @embedFile("corpus_region"),
     },
+    // Recorded from real sessions rather than generated -- see
+    // src/record.zig and docs/roadmap/agentic.md's A0.
+    .{
+        .name = "agent-claude",
+        .what = "a recorded agent CLI session, TUI and all",
+        .bytes = @embedFile("corpus_agent_claude"),
+    },
+    .{
+        .name = "agent-stream",
+        .what = "a recorded colourised diff streaming at full speed",
+        .bytes = @embedFile("corpus_agent_stream"),
+    },
 };
 
 fn nowNs() u64 {

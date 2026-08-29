@@ -27,7 +27,17 @@ pub const Pty = struct {
 
     pub const Error = error{ ForkFailed, WriteFailed };
 
+    /// Open a pty running the user's shell as a login shell.
     pub fn open(cols: u16, rows: u16, shell_override: ?[:0]const u8) !Pty {
+        const shell = shell_override orelse defaultShell();
+        return openCommand(cols, rows, &.{ shell, "-l" });
+    }
+
+    /// Open a pty running an arbitrary command. `argv[0]` is the program.
+    ///
+    /// The recorder needs this to run an agent CLI rather than a shell; the
+    /// terminal itself only ever wants `open`.
+    pub fn openCommand(cols: u16, rows: u16, argv_slice: []const [*:0]const u8) !Pty {
         var ws = c.winsize{
             .ws_row = rows,
             .ws_col = cols,
@@ -63,9 +73,14 @@ pub const Pty = struct {
             _ = c.unsetenv("LINES");
             _ = c.unsetenv("COLUMNS");
 
-            const shell = shell_override orelse defaultShell();
-            const argv = [_:null]?[*:0]const u8{ shell.ptr, "-l", null };
-            _ = c.execvp(shell.ptr, @ptrCast(@constCast(&argv)));
+            // A null-terminated copy of argv on the child's stack. Bounded
+            // rather than allocated: this runs after fork, where allocating
+            // is not safe.
+            var argv_buf: [64:null]?[*:0]const u8 = @splat(null);
+            const n = @min(argv_slice.len, argv_buf.len);
+            for (argv_slice[0..n], 0..) |a, i| argv_buf[i] = a;
+            argv_buf[n] = null;
+            _ = c.execvp(argv_slice[0], @ptrCast(@constCast(&argv_buf)));
 
             // execvp only returns on failure. _exit, not exit: we must not
             // run atexit handlers or flush the parent's buffers.

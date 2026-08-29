@@ -1,0 +1,321 @@
+//! What agent CLIs actually ask a terminal to do, and what this one does
+//! about it.
+//!
+//! A0 of docs/roadmap/agentic.md. Every sprint on that roadmap claims agents
+//! need something. This feeds the recorded corpora through the real parser,
+//! tallies every distinct sequence, and prints it beside what `terminal.zig`
+//! does with it — so the claim has a source and the roadmap's table is
+//! measured rather than remembered.
+//!
+//!   zig build audit
+//!
+//! The status column is a committed table below, not an inference: nothing
+//! at run time can see whether a `switch` arm is the *right* arm. Anything
+//! a corpus contains that the table does not mention is printed as
+//! `unlisted`, which is the point — a new sequence from a new agent version
+//! shows up as a question rather than as silence.
+
+const std = @import("std");
+const vt = @import("vt.zig");
+
+const corpora = [_]struct { name: []const u8, bytes: []const u8 }{
+    .{ .name = "agent-claude", .bytes = @embedFile("corpus_agent_claude") },
+    .{ .name = "agent-stream", .bytes = @embedFile("corpus_agent_stream") },
+    .{ .name = "altscreen", .bytes = @embedFile("corpus_altscreen") },
+    .{ .name = "sgr", .bytes = @embedFile("corpus_sgr") },
+    .{ .name = "region", .bytes = @embedFile("corpus_region") },
+};
+
+const Status = enum {
+    /// Implemented, and doing what the sequence means.
+    handled,
+    /// Not implemented, and ignoring it is correct or harmless.
+    ignored,
+    /// Implemented as something else. The screen is wrong afterwards.
+    mishandled,
+
+    fn label(self: Status) []const u8 {
+        return switch (self) {
+            .handled => "handled",
+            .ignored => "ignored",
+            .mishandled => "MIS-HANDLED",
+        };
+    }
+};
+
+const Known = struct {
+    /// The private-marker byte, 0 for none.
+    private: u8 = 0,
+    final: u8,
+    status: Status,
+    what: []const u8,
+    note: []const u8 = "",
+};
+
+/// What `terminal.zig` does today. Keep this in step with `csiDispatch`.
+const known_csi = [_]Known{
+    .{ .final = 'A', .status = .handled, .what = "CUU cursor up" },
+    .{ .final = 'B', .status = .handled, .what = "CUD cursor down" },
+    .{ .final = 'C', .status = .handled, .what = "CUF cursor right" },
+    .{ .final = 'D', .status = .handled, .what = "CUB cursor left" },
+    .{ .final = 'E', .status = .handled, .what = "CNL next line" },
+    .{ .final = 'F', .status = .handled, .what = "CPL previous line" },
+    .{ .final = 'G', .status = .handled, .what = "CHA column" },
+    .{ .final = 'H', .status = .handled, .what = "CUP position" },
+    .{ .final = 'I', .status = .handled, .what = "CHT tab forward" },
+    .{ .final = 'J', .status = .handled, .what = "ED erase display" },
+    .{ .final = 'K', .status = .handled, .what = "EL erase line" },
+    .{ .final = 'L', .status = .handled, .what = "IL insert lines" },
+    .{ .final = 'M', .status = .handled, .what = "DL delete lines" },
+    .{ .final = 'P', .status = .handled, .what = "DCH delete chars" },
+    .{ .final = 'S', .status = .handled, .what = "SU scroll up" },
+    .{ .final = 'T', .status = .handled, .what = "SD scroll down" },
+    .{ .final = 'X', .status = .handled, .what = "ECH erase chars" },
+    .{ .final = 'Z', .status = .handled, .what = "CBT tab back" },
+    .{ .final = '@', .status = .handled, .what = "ICH insert chars" },
+    .{ .final = '`', .status = .handled, .what = "HPA column" },
+    .{ .final = 'd', .status = .handled, .what = "VPA row" },
+    .{ .final = 'f', .status = .handled, .what = "HVP position" },
+    .{ .final = 'g', .status = .handled, .what = "TBC clear tabs" },
+    .{ .final = 'h', .status = .handled, .what = "SM set mode" },
+    .{ .final = 'l', .status = .handled, .what = "RM reset mode" },
+    .{ .final = 'm', .status = .handled, .what = "SGR" },
+    .{ .final = 'n', .status = .handled, .what = "DSR status report" },
+    .{ .final = 'r', .status = .handled, .what = "DECSTBM scroll region" },
+    .{ .final = 's', .status = .handled, .what = "save cursor" },
+    .{ .final = 'u', .status = .handled, .what = "restore cursor" },
+    .{ .final = 'c', .status = .handled, .what = "DA device attributes" },
+
+    .{ .private = '?', .final = 'h', .status = .handled, .what = "DEC set mode" },
+    .{ .private = '?', .final = 'l', .status = .handled, .what = "DEC reset mode" },
+
+    // The private-marker rows. `csiDispatch` switches on the final byte
+    // without looking at `csi.private`, so these reach the arm for the
+    // unprefixed sequence and do something entirely unrelated.
+    .{
+        .private = '>',
+        .final = 'm',
+        .status = .mishandled,
+        .what = "xterm modifyOtherKeys",
+        .note = "runs SGR: `CSI >4m` turns on underline",
+    },
+    .{
+        .private = '<',
+        .final = 'u',
+        .status = .mishandled,
+        .what = "kitty keyboard pop",
+        .note = "runs restore-cursor: the cursor teleports",
+    },
+    .{
+        .private = '>',
+        .final = 'u',
+        .status = .mishandled,
+        .what = "kitty keyboard push",
+        .note = "runs restore-cursor: the cursor teleports",
+    },
+    .{
+        .private = '=',
+        .final = 'u',
+        .status = .mishandled,
+        .what = "kitty keyboard set",
+        .note = "runs restore-cursor: the cursor teleports",
+    },
+    .{
+        .private = '?',
+        .final = 'u',
+        .status = .mishandled,
+        .what = "kitty keyboard query",
+        .note = "runs restore-cursor, and answers nothing",
+    },
+    .{
+        .private = '>',
+        .final = 'q',
+        .status = .ignored,
+        .what = "XTVERSION query",
+        .note = "no reply; the agent waits out its timeout",
+    },
+    .{
+        .private = '?',
+        .final = 'q',
+        .status = .ignored,
+        .what = "DECSCUSR-adjacent query",
+        .note = "no reply",
+    },
+    .{ .private = '>', .final = 'c', .status = .ignored, .what = "secondary DA", .note = "no reply" },
+    .{ .private = '?', .final = 'n', .status = .ignored, .what = "DEC status report", .note = "no reply" },
+    .{ .private = '?', .final = 'J', .status = .ignored, .what = "DECSED selective erase" },
+    .{ .private = '?', .final = 'K', .status = .ignored, .what = "DECSEL selective erase" },
+    .{ .private = '>', .final = 'K', .status = .ignored, .what = "xterm key resource" },
+};
+
+const known_osc = [_]struct { code: u16, status: Status, what: []const u8, note: []const u8 = "" }{
+    .{ .code = 0, .status = .handled, .what = "icon + window title" },
+    .{ .code = 1, .status = .ignored, .what = "icon title" },
+    .{ .code = 2, .status = .handled, .what = "window title" },
+    .{ .code = 4, .status = .ignored, .what = "set palette colour", .note = "the palette stays the theme's" },
+    .{ .code = 7, .status = .ignored, .what = "working directory", .note = "wanted by A3" },
+    .{ .code = 8, .status = .ignored, .what = "hyperlink", .note = "wanted by A4" },
+    .{ .code = 9, .status = .ignored, .what = "desktop notification", .note = "wanted by A1" },
+    .{ .code = 10, .status = .ignored, .what = "foreground colour query", .note = "no reply" },
+    .{ .code = 11, .status = .ignored, .what = "background colour query", .note = "no reply" },
+    .{ .code = 52, .status = .ignored, .what = "clipboard", .note = "see S0 before implementing" },
+    .{ .code = 133, .status = .ignored, .what = "semantic prompt marks", .note = "the keystone of A3" },
+    .{ .code = 633, .status = .ignored, .what = "VS Code shell integration" },
+    .{ .code = 777, .status = .ignored, .what = "notification (urxvt form)", .note = "wanted by A1" },
+};
+
+/// One observed sequence, and how often.
+const Seen = struct {
+    count: u64 = 0,
+    corpora: u32 = 0, // bitmask, one bit per corpus
+};
+
+/// Tallies rather than acts. The parser cannot tell the difference.
+const Tally = struct {
+    csi: std.AutoHashMapUnmanaged(u16, Seen) = .empty,
+    osc: std.AutoHashMapUnmanaged(u16, Seen) = .empty,
+    esc: std.AutoHashMapUnmanaged(u16, Seen) = .empty,
+    executes: std.AutoHashMapUnmanaged(u8, Seen) = .empty,
+    printed: u64 = 0,
+    alloc: std.mem.Allocator,
+    bit: u32 = 0,
+
+    fn key(private: u8, final: u8) u16 {
+        return (@as(u16, private) << 8) | final;
+    }
+
+    fn bump(self: *Tally, map: anytype, k: anytype) void {
+        const gop = map.getOrPut(self.alloc, k) catch return;
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        gop.value_ptr.count += 1;
+        gop.value_ptr.corpora |= self.bit;
+    }
+
+    pub fn print(self: *Tally, cp: u21) void {
+        _ = cp;
+        self.printed += 1;
+    }
+    pub fn printRun(self: *Tally, run: []const u8) void {
+        self.printed += run.len;
+    }
+    pub fn execute(self: *Tally, b: u8) void {
+        self.bump(&self.executes, b);
+    }
+    pub fn escDispatch(self: *Tally, intermediates: []const u8, final: u8) void {
+        self.bump(&self.esc, key(if (intermediates.len > 0) intermediates[0] else 0, final));
+    }
+    pub fn csiDispatch(self: *Tally, csi: vt.Csi) void {
+        self.bump(&self.csi, key(csi.private, csi.final));
+    }
+    pub fn oscDispatch(self: *Tally, data: []const u8) void {
+        const semi = std.mem.indexOfScalar(u8, data, ';') orelse data.len;
+        const code = std.fmt.parseInt(u16, data[0..semi], 10) catch 0xffff;
+        self.bump(&self.osc, code);
+    }
+};
+
+fn csiStatus(private: u8, final: u8) ?Known {
+    for (known_csi) |k| {
+        if (k.private == private and k.final == final) return k;
+    }
+    return null;
+}
+
+pub fn main() !void {
+    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa_state.deinit();
+    const gpa = gpa_state.allocator();
+
+    var tally = Tally{ .alloc = gpa };
+    defer {
+        tally.csi.deinit(gpa);
+        tally.osc.deinit(gpa);
+        tally.esc.deinit(gpa);
+        tally.executes.deinit(gpa);
+    }
+
+    std.debug.print("protocol audit: what the corpora ask for\n\n", .{});
+    std.debug.print("  {s:<14} {s:>10} {s:>8} {s:>8} {s:>8}\n", .{ "corpus", "bytes", "CSI", "OSC", "ESC" });
+    std.debug.print("  {s:-<14} {s:->10} {s:->8} {s:->8} {s:->8}\n", .{ "", "", "", "", "" });
+
+    for (corpora, 0..) |corpus, i| {
+        tally.bit = @as(u32, 1) << @intCast(i);
+        const before_csi = tally.csi.count();
+        const before_osc = tally.osc.count();
+        const before_esc = tally.esc.count();
+
+        var parser: vt.Parser = .{};
+        parser.feed(&tally, corpus.bytes);
+
+        std.debug.print("  {s:<14} {d:>10} {d:>8} {d:>8} {d:>8}\n", .{
+            corpus.name,
+            corpus.bytes.len,
+            tally.csi.count() - before_csi,
+            tally.osc.count() - before_osc,
+            tally.esc.count() - before_esc,
+        });
+    }
+
+    var mishandled: usize = 0;
+    var unlisted: usize = 0;
+
+    std.debug.print("\nCSI sequences observed\n\n", .{});
+    std.debug.print("  {s:<12} {s:>9}  {s:<12}  {s:<26}  {s}\n", .{ "sequence", "count", "status", "what it means", "note" });
+    std.debug.print("  {s:-<12} {s:->9}  {s:-<12}  {s:-<26}  {s:-<44}\n", .{ "", "", "", "", "" });
+
+    var it = tally.csi.iterator();
+    while (it.next()) |entry| {
+        const private: u8 = @intCast(entry.key_ptr.* >> 8);
+        const final: u8 = @truncate(entry.key_ptr.*);
+        var name: [16]u8 = undefined;
+        const seq = if (private != 0)
+            std.fmt.bufPrint(&name, "CSI {c} {c}", .{ private, final }) catch continue
+        else
+            std.fmt.bufPrint(&name, "CSI {c}", .{final}) catch continue;
+
+        if (csiStatus(private, final)) |k| {
+            if (k.status == .mishandled) mishandled += 1;
+            std.debug.print("  {s:<12} {d:>9}  {s:<12}  {s:<26}  {s}\n", .{
+                seq, entry.value_ptr.count, k.status.label(), k.what, k.note,
+            });
+        } else {
+            unlisted += 1;
+            std.debug.print("  {s:<12} {d:>9}  {s:<12}  {s:<26}  {s}\n", .{
+                seq, entry.value_ptr.count, "unlisted", "-", "not in the table; decide",
+            });
+        }
+    }
+
+    std.debug.print("\nOSC sequences observed\n\n", .{});
+    var osc_it = tally.osc.iterator();
+    while (osc_it.next()) |entry| {
+        const code = entry.key_ptr.*;
+        var found = false;
+        for (known_osc) |k| {
+            if (k.code != code) continue;
+            found = true;
+            if (k.status == .mishandled) mishandled += 1;
+            std.debug.print("  {s:<12} {d:>9}  {s:<12}  {s:<26}  {s}\n", .{
+                "OSC", entry.value_ptr.count, k.status.label(), k.what, k.note,
+            });
+        }
+        if (!found) {
+            unlisted += 1;
+            std.debug.print("  OSC {d:<8} {d:>9}  {s:<12}  {s:<26}  {s}\n", .{
+                code, entry.value_ptr.count, "unlisted", "-", "not in the table; decide",
+            });
+        }
+    }
+
+    std.debug.print(
+        "\n{d} sequence(s) mis-handled, {d} unlisted\n",
+        .{ mishandled, unlisted },
+    );
+    if (mishandled > 0) {
+        std.debug.print(
+            "A mis-handled row is a sequence this terminal executes as something else.\n" ++
+                "It is not a missing feature; the screen is wrong afterwards.\n",
+            .{},
+        );
+    }
+}
