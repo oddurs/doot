@@ -77,8 +77,14 @@ pub const DecodeError = error{
     UnsupportedFormat,
     Truncated,
     BadChecksum,
+    TooLarge,
     OutOfMemory,
 } || std.compress.flate.Decompress.Error;
+
+/// Enough for any screen anyone will capture, and small enough that the
+/// header cannot talk the decoder into a huge allocation. `w * h * 4` for
+/// this many pixels is 128 MiB.
+pub const max_pixels: u64 = 32 << 20;
 
 /// Decode what `encode` produces: 8-bit RGBA, no interlace, filter 0.
 /// Anything else is `UnsupportedFormat` rather than a partial result.
@@ -127,9 +133,14 @@ pub fn decode(alloc: std.mem.Allocator, bytes: []const u8) !Image {
     // truncated capture has to be an error rather than a shorter picture.
     if (!saw_iend) return DecodeError.Truncated;
     if (w == 0 or h == 0) return DecodeError.UnsupportedFormat;
+    // The dimensions come straight out of the file, so they are bounded
+    // before they are multiplied. Without this a 70-byte header claiming
+    // 0x40000000 x 1 overflows the u32 arithmetic below -- a panic in a
+    // safe build, a bogus Image in a fast one.
+    if (@as(u64, w) * @as(u64, h) > max_pixels) return DecodeError.TooLarge;
 
-    const stride = w * 4;
-    const raw = try alloc.alloc(u8, (stride + 1) * h);
+    const stride: usize = @as(usize, w) * 4;
+    const raw = try alloc.alloc(u8, (stride + 1) * @as(usize, h));
     defer alloc.free(raw);
 
     var reader = std.Io.Reader.fixed(idat.items);
@@ -143,7 +154,7 @@ pub fn decode(alloc: std.mem.Allocator, bytes: []const u8) !Image {
     };
     if (out_writer.buffered().len != raw.len) return DecodeError.Truncated;
 
-    const pixels = try alloc.alloc(u8, stride * h);
+    const pixels = try alloc.alloc(u8, stride * @as(usize, h));
     errdefer alloc.free(pixels);
     for (0..h) |y| {
         // Only filter type 0 is written by `encode`; anything else means
@@ -239,6 +250,33 @@ test "corrupt input is refused rather than half-decoded" {
     const cut = try testing.allocator.dupe(u8, bytes[0 .. bytes.len - 10]);
     defer testing.allocator.free(cut);
     try testing.expectError(DecodeError.Truncated, decode(testing.allocator, cut));
+}
+
+test "an oversized or overflowing header is refused, not multiplied" {
+    // Hand-built headers with correct CRCs, so the checksum guard does not
+    // catch these first. Before the bound, the first two panicked on
+    // integer overflow and the third asked for 13 GB.
+    const cases = [_][2]u32{
+        .{ 0x4000_0000, 1 },
+        .{ 1, 0x8000_0000 },
+        .{ 60000, 60000 },
+    };
+    for (cases) |dims| {
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(testing.allocator);
+        try buf.appendSlice(testing.allocator, &signature);
+        var ihdr: [13]u8 = undefined;
+        std.mem.writeInt(u32, ihdr[0..4], dims[0], .big);
+        std.mem.writeInt(u32, ihdr[4..8], dims[1], .big);
+        ihdr[8] = 8;
+        ihdr[9] = 6;
+        ihdr[10] = 0;
+        ihdr[11] = 0;
+        ihdr[12] = 0;
+        try chunk(&buf, testing.allocator, "IHDR", &ihdr);
+        try chunk(&buf, testing.allocator, "IEND", "");
+        try testing.expectError(DecodeError.TooLarge, decode(testing.allocator, buf.items));
+    }
 }
 
 test "a 1x1 image is not a special case" {

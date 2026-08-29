@@ -99,6 +99,39 @@ be, and the box-drawing row is partial. That is not a regression; it is the
 where-we-are table, which until now was a sentence. It is [X2](../experience.md)'s
 job, and the gallery is how anyone will be able to tell it worked.
 
+## What review found
+
+Five defects, all fixed before merge. Two of them mattered enough to change
+what the sprint means.
+
+**The gallery was not headless.** `std.process.spawn` with no environment
+map hands the child an *empty* environment, so the `SDL_VIDEODRIVER=dummy`
+the build step set never reached the app. Every reference in the first draft
+was rendered through the real Cocoa and Metal backend at the maintainer's
+display density, while the documentation, the build comment and the CI job
+all said otherwise. Running it genuinely headless made all ten fail — five
+of them on size alone, which skips the pixel diff entirely, so the arbiter
+would have been blind for half its captures. `gallery.zig` now builds the
+child's environment itself, which also means `zig build gallery` is headless
+however it was invoked.
+
+**A capture depended on the machine that took it.** The window size is set
+in logical units, so `want_px / density` rounds: on a 2× display an odd
+pixel height became an even one, and the same capture differed by a row
+between machines — the exact dependency `--scale` exists to remove.
+Screenshots are now cropped to the grid's own pixel size.
+
+Also fixed: `png.decode` multiplied header fields in `u32` before bounding
+them, so a 70-byte file claiming 0x40000000 × 1 panicked in a safe build and
+returned a bogus image in a fast one; and one unreadable reference aborted
+the whole run rather than reporting that capture and continuing.
+
+**And a regression this sprint introduced.** The drain added above waited
+for the PTY to go quiet — which a live child never allows. Closing the
+window while a command was producing output hung the app until it was
+killed. The drain now runs only when the child has actually exited, and
+under a deadline.
+
 ## Not gating, deliberately
 
 Like the bench. A visual diff is usually an intended change and the reviewer

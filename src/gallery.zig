@@ -93,6 +93,17 @@ pub fn main(init: std.process.Init.Minimal) !void {
         if (std.mem.eql(u8, std.mem.span(a), "--update")) update = true;
     }
 
+    // Spawning with no environment map hands the child an *empty* one, so
+    // an SDL_VIDEODRIVER set on this process would never reach it -- the
+    // gallery would quietly render through the real window server, and its
+    // references would be whatever display the maintainer happened to have.
+    // Setting it here rather than inheriting it also means `zig build
+    // gallery` is headless however it was invoked.
+    var environ = std.process.Environ.Map.init(gpa);
+    defer environ.deinit();
+    try environ.putPosixBlock(init.environ.block.view());
+    try environ.put("SDL_VIDEODRIVER", "dummy");
+
     const cwd = std.Io.Dir.cwd();
     cwd.createDirPath(io, current_dir) catch {};
     if (update) cwd.createDirPath(io, expected_dir) catch {};
@@ -131,6 +142,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
                 "--font-size", font_size, "--scale",  scale,    "--screenshot",
                 out_path,
             },
+            .environ_map = &environ,
             // The scenes print and exit; their output is the picture, not
             // something anyone needs to read here.
             .stdout = .ignore,
@@ -152,7 +164,16 @@ pub fn main(init: std.process.Init.Minimal) !void {
         const want_bytes = cwd.readFileAlloc(io, want_path, gpa, .limited(64 << 20)) catch null;
         if (want_bytes) |wb| {
             defer gpa.free(wb);
-            var want = try png.decode(gpa, wb);
+            // A reference that will not decode is a reason to report that
+            // capture and carry on, not to abandon the other nine.
+            var want = png.decode(gpa, wb) catch |err| {
+                changed += 1;
+                std.debug.print("  {s:<22} {s:>11} {s:>12} {s:>9}  reference unreadable ({t})\n", .{
+                    cap.name, dims, "-", "-", err,
+                });
+                if (update) try cwd.writeFile(io, .{ .sub_path = want_path, .data = got_bytes });
+                continue;
+            };
             defer want.deinit(gpa);
 
             if (want.w != got.w or want.h != got.h) {

@@ -78,6 +78,13 @@ pub const Renderer = struct {
     atlas: font.Atlas,
     theme: theme.Theme,
     frame: Frame = .{},
+    /// The pixel size a capture is cropped to: exactly the grid plus its
+    /// padding. The window itself can end up a pixel larger, because its
+    /// size is set in logical units and the host display's density decides
+    /// how those round -- and a capture that changes with the machine it
+    /// was taken on is not a reference.
+    capture_w: u32 = 0,
+    capture_h: u32 = 0,
     /// The frame's geometry, rebuilt every draw and submitted in one call.
     verts: std.ArrayList(Vertex) = .empty,
     indices: std.ArrayList(i32) = .empty,
@@ -162,12 +169,12 @@ pub const Renderer = struct {
         // Without this a forced scale would render 2x glyphs into a 1x
         // window and show half the columns.
         const pad_px_i: u32 = @intFromFloat(@round(pad * scale));
-        const want_px_w: f32 = @floatFromInt(init_cols * f.metrics.cell_w + pad_px_i * 2);
-        const want_px_h: f32 = @floatFromInt(init_rows * f.metrics.cell_h + pad_px_i * 2);
+        const want_w: u32 = init_cols * f.metrics.cell_w + pad_px_i * 2;
+        const want_h: u32 = init_rows * f.metrics.cell_h + pad_px_i * 2;
         _ = c.SDL_SetWindowSize(
             window,
-            @intFromFloat(@round(want_px_w / density)),
-            @intFromFloat(@round(want_px_h / density)),
+            @intFromFloat(@round(@as(f32, @floatFromInt(want_w)) / density)),
+            @intFromFloat(@round(@as(f32, @floatFromInt(want_h)) / density)),
         );
 
         var self = Renderer{
@@ -180,7 +187,9 @@ pub const Renderer = struct {
             .scale = scale,
             .px_w = 0,
             .px_h = 0,
-            .pad_px = @intFromFloat(@round(pad * scale)),
+            .pad_px = @intCast(pad_px_i),
+            .capture_w = want_w,
+            .capture_h = want_h,
         };
         self.updateSize();
         return self;
@@ -490,8 +499,14 @@ pub const Renderer = struct {
         const surface = c.SDL_ConvertSurface(raw, c.SDL_PIXELFORMAT_RGBA32) orelse return;
         defer c.SDL_DestroySurface(surface);
 
-        const w: u32 = @intCast(surface.*.w);
-        const h: u32 = @intCast(surface.*.h);
+        // Crop to the size the grid asked for. Setting the window size is
+        // done in logical units, so on a 2x display an odd pixel height
+        // rounds up by one and the same capture differs by a row between
+        // machines. Cropping makes a reference reproducible anywhere.
+        const full_w: u32 = @intCast(surface.*.w);
+        const full_h: u32 = @intCast(surface.*.h);
+        const w = if (self.capture_w > 0) @min(self.capture_w, full_w) else full_w;
+        const h = if (self.capture_h > 0) @min(self.capture_h, full_h) else full_h;
         const pitch: usize = @intCast(surface.*.pitch);
         const src: [*]const u8 = @ptrCast(surface.*.pixels orelse return);
 

@@ -92,8 +92,10 @@ pub fn build(b: *std.Build) void {
     // experience roadmap, the way `bench` is for the performance one.
     //
     // It drives the built binary rather than linking the renderer, so it
-    // needs neither SDL nor FreeType itself. SDL_VIDEODRIVER=dummy is what
-    // lets it run with no display; the child inherits it.
+    // needs neither SDL nor FreeType itself. Running with no display is
+    // gallery.zig's job -- it puts SDL_VIDEODRIVER in the child's
+    // environment explicitly, because a spawn with no environment map
+    // gives the child an empty one and nothing set here would reach it.
     const gallery_mod = b.createModule(.{
         .root_source_file = b.path("src/gallery.zig"),
         .target = target,
@@ -103,7 +105,6 @@ pub fn build(b: *std.Build) void {
     const gallery_exe = b.addExecutable(.{ .name = "gallery", .root_module = gallery_mod });
     const gallery_run = b.addRunArtifact(gallery_exe);
     gallery_run.addArtifactArg(exe);
-    gallery_run.setEnvironmentVariable("SDL_VIDEODRIVER", "dummy");
     gallery_run.has_side_effects = true;
     if (b.args) |args| gallery_run.addArgs(args);
     const gallery_step = b.step("gallery", "Render the screenshot gallery and diff it");

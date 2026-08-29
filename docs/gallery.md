@@ -38,15 +38,20 @@ committed.
 
 ## How it runs headless
 
-`SDL_VIDEODRIVER=dummy` — set by the build step — gives SDL a video backend
-with no display, and `--screenshot` reads the frame back through
-`SDL_RenderReadPixels` *before* present. So a capture is exactly what the
+`SDL_VIDEODRIVER=dummy` — put into the child's environment by `gallery.zig`
+itself — gives SDL a video backend with no display, and `--screenshot` reads
+the frame back through `SDL_RenderReadPixels` *before* present. So a capture is exactly what the
 renderer produced, needs no screen-recording permission, and works on a CI
 runner. (The `offscreen` driver does not work; it fails to create a window.)
 
 `--scale N` tells the app to pretend the display has that pixel density
 rather than asking it. That is the only way a 2× capture is reproducible on
 a 1× machine, and it is why the gallery can assert Retina rendering from CI.
+
+Captures are cropped to the grid's own pixel size. A window's size is set in
+logical units, so on a 2× display an odd pixel height rounds up by one and
+the same capture would differ by a row depending on the machine that took
+it. A reference has to be reproducible anywhere or it is not a reference.
 
 PNGs are written by `src/png.zig`, about a hundred lines over
 `std.compress.flate` — 8-bit RGBA, no interlacing, filter 0. The project
