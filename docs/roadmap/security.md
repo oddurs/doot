@@ -13,31 +13,12 @@ paste — has a row in the table below saying what is allowed, and a test
 that proves the forbidden case emits nothing. Every parser of untrusted
 input has a fuzz target that runs in CI.
 
-## The threat model
+## The threat model and the policy
 
-Four attackers, in the order they matter.
-
-1. **A program writing to the terminal.** It wants to run a command as
-   the user (inject bytes into the shell's input), read something (the
-   clipboard, the screen, the title), or spoof the display (hide what
-   was really run). This is the one `SECURITY.md` already describes and
-   the one every sprint below serves.
-2. **A file the user opens.** A font in `~/Library/Fonts`, a config
-   file, a corpus, a PNG inside an emoji font. After
-   [D1](dependencies.md) and [D2](dependencies.md) those parsers are
-   ours, and ours to fuzz.
-3. **A local process.** Once [A6](agentic.md)'s socket exists, another
-   user's process on the same machine must not be able to type into a
-   tab.
-4. **The build.** What lands in the release binary and how anyone could
-   check.
-5. **Whoever reads the disk.** Once [L0](record.md) records sessions,
-   the record is a new asset: what was printed, and — if the user
-   opted in — what was typed. Its protection is S6.
-
-Not an attacker: the user at the keyboard. `--shell`, `--screenshot`
-and `--font` take what they are given; if you can pass arguments you
-can already run anything, as `SECURITY.md` says.
+Both live in [docs/security.md](../security.md) — the permanent home S0
+gave them, with a test named beside every row. The one-sentence rule:
+**the terminal never sends the child bytes derived from screen content,
+the title, the clipboard, or another tab.**
 
 ## Where we are
 
@@ -64,28 +45,6 @@ can already run anything, as `SECURITY.md` says.
 The strongest line in that table is the third one, and it is there by
 accident of not having implemented the queries yet. S0 makes it a rule.
 
-## The policy table
-
-The rule: **the terminal never sends the child bytes derived from screen
-content, the title, the clipboard, or another tab.** Replies carry only
-what the child could already know — modes, capabilities, cursor
-position.
-
-| Sequence | Direction | Policy |
-|---|---|---|
-| DA1, DA2, XTVERSION, DECRQM, DSR 5/6, XTWINOPS 14/16/18 | reply | Allowed: capabilities, modes, geometry. |
-| XTWINOPS 21 (report title), 20 (report icon) | reply | **Never.** Title is child-controlled; reporting it is an injection channel. |
-| DECRQSS, DECRQCRA (checksum of screen), XTGETTCAP | reply | Refused until a program is found that needs it; DECRQCRA never — it reads the screen. |
-| OSC 52 write | out to clipboard | Allowed by default; capped at 1 MiB; config key to disable. |
-| OSC 52 read | reply | **Off by default.** Key to enable; the docs say what it means. |
-| OSC 8 link | on click only | Schemes `http`, `https`, `mailto`; `file` with a confirm; anything else shown and not opened. The URI is displayed before opening. |
-| Path open ([A4](agentic.md)) | subprocess | Editor invoked with `--` and an absolute path; never through a shell. |
-| OSC 0/2 title, OSC 9/777 notification text | to the OS | C0 and C1 stripped; length-capped; never interpreted. |
-| Paste, bracketed mode off | into the PTY | **Guarded** (S1): `\n`, `\r`, `\x1b` or any C0 prompts once, shows what will be sent. |
-| Paste, bracketed mode on | into the PTY | Sent inside the markers; a `\x1b[201~` inside the payload is stripped so the paste cannot close its own bracket. |
-| DCS, APC, SOS, PM | — | Swallowed. Stays that way. |
-| Remote-control socket ([A6](agentic.md)) | in | Token, 0600, per user; see S4. |
-
 ## The sprints
 
 ### S0 — The threat model and the table, made binding (two days)
@@ -105,6 +64,16 @@ a list of exceptions.
 section cites it.
 
 *Risk:* none.
+
+*Result:* done. [docs/security.md](../security.md) holds the threat
+model and the table; six tests in `src/terminal.zig` hold the rows that
+have a status today; `SECURITY.md` states the rule and links the page.
+On the way, [#28](https://github.com/oddurs/doot/issues/28) closed:
+`csiDispatch` now ignores any CSI with a private marker or intermediates
+it does not implement instead of dispatching it on the bare final —
+`CSI > 4 m` no longer turns underline on and `CSI < u` no longer moves
+the cursor. `zig build audit` went from two mis-handled sequences to
+none. See [the record](completed/sprint-s0-reply-policy.md).
 
 ### S1 — Safe defaults for untrusted output (one week)
 

@@ -451,9 +451,25 @@ pub const Terminal = struct {
     }
 
     pub fn csiDispatch(self: *Terminal, csi: vt.Csi) void {
+        // A CSI carrying intermediates is a different sequence from the
+        // one with the same final byte: `CSI $ r` is DECCARA, not DECSTBM;
+        // `CSI SP q` is DECSCUSR, not anything. None of them is implemented
+        // yet, and ignoring must not fall through to the plain-final arm,
+        // or DECCARA's rectangle becomes a scroll region.
+        if (csi.intermediates.len > 0) return;
         defer self.markDirty();
-        // Intermediates mean a sequence we don't implement (DECSCUSR is the
-        // notable one, via ' q'); ignoring is the correct fallback.
+        // Likewise a private marker. `CSI > 4 m` is modifyOtherKeys, not
+        // SGR 4; `CSI < u` is a kitty keyboard pop, not restore-cursor. Only
+        // the arms that know their private forms see them (#28); the rest
+        // are ignored until A2 implements them. See docs/security.md.
+        if (csi.private != 0) {
+            switch (csi.final) {
+                'h' => self.setMode(csi, true),
+                'l' => self.setMode(csi, false),
+                else => {},
+            }
+            return;
+        }
         switch (csi.final) {
             'A' => self.moveUp(csi.get(0, 1)),
             'B' => self.moveDown(csi.get(0, 1)),
@@ -1500,4 +1516,77 @@ test "rows that survive a height change keep their identity" {
     const id = t.screen().rowMeta(0).id;
     try t.resize(10, 8);
     try testing.expectEqual(id, t.screen().rowMeta(0).id);
+}
+
+// -- the reply policy: docs/security.md ------------------------------------
+//
+// One test per row of the policy table. A change that makes any of these
+// fail is a change to what the terminal sends the child, and that is the
+// one thing this file must never do by accident.
+
+test "a private-marker CSI is not the unprefixed sequence (#28)" {
+    var t = try mkTerm(10, 4);
+    defer t.deinit();
+    // xterm modifyOtherKeys (ctlseqs: CSI > Pp ; Pv m), not SGR 4.
+    feed(&t, "\x1b[>4mA");
+    try testing.expect(!t.screen().at(0, 0).attrs.underline);
+    // kitty keyboard push / set / query / pop, not SCORC (`CSI u`).
+    feed(&t, "\x1b[3;3H");
+    feed(&t, "\x1b[>1u\x1b[=1;1u\x1b[?u\x1b[<u");
+    try testing.expectEqual(@as(usize, 2), t.cursor.x);
+    try testing.expectEqual(@as(usize, 2), t.cursor.y);
+    try testing.expectEqualStrings("", t.replies.items);
+    // The private forms that are implemented still work.
+    feed(&t, "\x1b[?25l");
+    try testing.expect(!t.modes.cursor_visible);
+}
+
+test "a CSI with intermediates is ignored rather than dispatched on its final" {
+    var t = try mkTerm(10, 6);
+    defer t.deinit();
+    // DECCARA (ctlseqs: CSI Pt ; Pl ; Pb ; Pr ; Ps $ r) is not DECSTBM.
+    feed(&t, "\x1b[2;1;3;5;1$r");
+    try testing.expectEqual(@as(usize, 0), t.scroll_top);
+    try testing.expectEqual(@as(usize, 5), t.scroll_bot);
+    // DECSCUSR (CSI Ps SP q) leaves the cursor where it was.
+    feed(&t, "\x1b[4;4H\x1b[2 q");
+    try testing.expectEqual(@as(usize, 3), t.cursor.x);
+    try testing.expectEqual(@as(usize, 3), t.cursor.y);
+}
+
+test "the title is never reported back to the child" {
+    var t = try mkTerm(20, 4);
+    defer t.deinit();
+    feed(&t, "\x1b]2;rm -rf ~\x07");
+    // XTWINOPS 21 (report title) and 20 (report icon label).
+    feed(&t, "\x1b[21t\x1b[20t");
+    try testing.expectEqualStrings("", t.replies.items);
+}
+
+test "screen-reading queries are never answered" {
+    var t = try mkTerm(20, 4);
+    defer t.deinit();
+    feed(&t, "SECRET");
+    // DECRQCRA: a checksum of a screen rectangle.
+    feed(&t, "\x1b[1;1;1;1;20;4*y");
+    // DECRQSS and XTGETTCAP ride a DCS, which is swallowed to ST.
+    feed(&t, "\x1bP$qm\x1b\\");
+    feed(&t, "\x1bP+q544e\x1b\\");
+    try testing.expectEqualStrings("", t.replies.items);
+}
+
+test "the clipboard is never read back to the child by default" {
+    var t = try mkTerm(20, 4);
+    defer t.deinit();
+    feed(&t, "\x1b]52;c;?\x07");
+    try testing.expectEqualStrings("", t.replies.items);
+}
+
+test "the replies that are allowed carry nothing from the screen" {
+    var t = try mkTerm(20, 4);
+    defer t.deinit();
+    feed(&t, "SECRET\x1b[2;3H");
+    feed(&t, "\x1b[c\x1b[5n\x1b[6n");
+    try testing.expectEqualStrings("\x1b[?62;1;6;22c\x1b[0n\x1b[2;3R", t.replies.items);
+    try testing.expect(std.mem.indexOf(u8, t.replies.items, "SECRET") == null);
 }
