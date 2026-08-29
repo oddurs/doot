@@ -3,7 +3,7 @@
 ## Live plans
 
 - [performance.md](performance.md) — the performance sprints. Six planned,
-  five done, one retired by measurement, one open and gated.
+  five done, two retired by measurement, none open.
 
 Feature gaps (selection, reflow, ligatures, mouse reporting) are tracked in
 the README's "Not done yet" list rather than here; they need design more than
@@ -12,7 +12,7 @@ they need sequencing.
 ## Completed and retired
 
 Each record says what was proposed, what was measured, and what it changed
-about the plan. The retired one is the most useful of the six.
+about the plan. The two retired ones are the most useful of the seven.
 
 | Record | Outcome |
 |---|---|
@@ -21,6 +21,7 @@ about the plan. The retired one is the most useful of the six.
 | [Sprint 1 — vsync out of the lock](completed/sprint-1-vsync-lock.md) | ~150× on bulk output. Brought the frame timer the bench could not. |
 | [Sprint 2 — one draw call](completed/sprint-2-one-draw-call.md) | 2 calls per frame; worst-case build ~40× better. Premise was partly wrong. |
 | [Sprint 4 — printable-run fast path](completed/sprint-4-print-run.md) | 4.3× on `ascii`. One mutant survived the first tests and got its own. |
+| [Sprint 3 — damage tracking](completed/sprint-3-damage-tracking.md) | **Retired.** Gate failed: a keystroke costs ~0.4 ms of build. |
 | [Sprint 5 — shrink the cell](completed/sprint-5-cell-size.md) | **Retired.** Gate failed; three weeks of work never started. |
 
 ## Tracking

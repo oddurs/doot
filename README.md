@@ -75,8 +75,9 @@ terminal uses no CPU.
 - **Ligatures.** One glyph per cell; no HarfBuzz shaping yet.
 - **Bold and italic** are synthesized from the regular face rather than loaded
   from real bold/italic faces.
-- **Damage tracking.** Every frame repaints the whole grid. Fine at these
-  sizes, but per-row damage is the obvious next optimization.
+- **Damage tracking.** Every frame rebuilds the whole grid into one draw
+  call. Measured at ~0.2–0.4 ms per keystroke, which is why it stays that
+  way — see [the retired sprint](docs/roadmap/completed/sprint-3-damage-tracking.md).
 
 ## Contributing
 
