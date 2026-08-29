@@ -172,17 +172,12 @@ message.
 
 *Risk:* low.
 
-### C5 — The test infrastructure (ongoing, half a day a sprint)
+### C5 — The test infrastructure — **moved**
 
-- Coverage reported per module, non-gating.
-- Every completed sprint record's manual mutation test becomes a script
-  under `bench/mutants/` that applies the mutation and expects the suite
-  to fail. Sprint R listed seven; they are the first seven.
-- Bench, gallery and esctest numbers on every PR summary, all
-  non-gating, all visible.
-
-*Done when:* a contributor can run `zig build test bench gallery
-conformance` and see every arbiter on this plan in one go.
+This became [testing.md](testing.md): the mutants as a script and the
+differential model are T0, coverage and the one-place PR summary are
+T4. Conformance stays here as C0; the harness that runs it on every PR
+is testing's.
 
 ## Why this order
 

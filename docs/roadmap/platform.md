@@ -125,12 +125,11 @@ reproduce a font, scale or config problem without a follow-up question.
 - **x86_64 macOS** is a `-Dtarget` flag after [D5](dependencies.md) —
   frameworks come from the SDK, not from a keg — and `lipo` in the
   workflow makes the universal binary. It lands with D5, not here.
-- **Linux** — a second implementation of the `Platform` interface
-  [D4](dependencies.md) defines, in C against Wayland or X11, plus a
-  Vulkan or OpenGL `gpu.c` behind the same functions as `gpu.m`. The
-  rasterizer and font parser are already ours and portable; discovery
-  moves from the hard-coded `/System/Library/Fonts` list to scanning the
-  XDG font directories. `forkpty` moves from `util.h` to `pty.h`.
+- **Linux, and Windows after it,** are planned in full on
+  [compatibility.md](compatibility.md) — M2 and M3, each a second
+  implementation of the `Platform` and `Pty` seams
+  [D4](dependencies.md) defines, with what "platform" means on each OS
+  written down there. This entry keeps only the gate.
 
 *Gate:* not before the Mac experience is complete — every sprint labelled
 "next" on [experience.md](experience.md) landed — and not before someone
@@ -156,5 +155,7 @@ macOS first, finished, then elsewhere.
   runs and a file the user attaches.
 - **A Mac App Store build.** Sandboxing and a terminal are at odds; the
   DMG and the cask are the channels.
-- **Windows.** No `forkpty`, no PTY semantics this code assumes. A
-  different program.
+- **Windows, from here.** ConPTY is a different shape from `forkpty`,
+  and the input model is different too — but the core is the same
+  program, and [compatibility.md](compatibility.md)'s M3 plans the port
+  as a second platform layer, gated behind Linux.
