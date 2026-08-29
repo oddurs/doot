@@ -22,7 +22,7 @@ and the worst single-channel delta.
 ```
   capture                       size    differing     worst  result
   ---------------------- ----------- ------------ ---------  ----------------
-  typography-14pt-1x         678x200            0         0  identical
+  typography-14pt-1x         678x199            0         0  identical
   cursor-14pt-1x              444x80           17       194  0.05% of pixels
 ```
 
