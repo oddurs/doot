@@ -70,7 +70,10 @@ jobs:
           cp zig-out/bin/terminator "dist/${name}/"
           cp README.md LICENSE "dist/${name}/"
           tar -czf "dist/${name}.tar.gz" -C dist "${name}"
-          shasum -a 256 "dist/${name}.tar.gz" > "dist/${name}.tar.gz.sha256"
+          # Record the basename, not the build path: whoever downloads
+          # these two files puts them side by side, and a checksum naming
+          # `dist/...` makes `shasum -a 256 -c` fail to find its own file.
+          ( cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256" )
 
       - uses: actions/upload-artifact@v4
         with:
