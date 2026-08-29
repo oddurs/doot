@@ -110,6 +110,42 @@ and `present` are within noise of the SDL numbers at 100×30 and 200×60;
 *Risk:* low to medium. The only unknown is how much of Metal's object
 soup ends up in `gpu.m`; the 400-line rule is the check.
 
+*Gate check, measured before starting:* the risk was mis-stated, and the
+plan above needs one change.
+
+**SDL's headless driver cannot make a Metal window at all.** The gallery
+— which this sprint is verified by, and whose *done when* says "the
+gallery is identical before the format flip" — runs under
+`SDL_VIDEODRIVER=dummy`, and there:
+
+```
+window FAILED: Metal support is either not configured in SDL or not
+available in current SDL video driver (dummy) or platform
+```
+
+So `SDL_Metal_CreateView` is not a path CI can take, and D0 as written
+would land with its own arbiter switched off.
+
+**Metal itself needs no window.** `MTLCreateSystemDefaultDevice`, an
+offscreen `MTLTexture` render target, a render pass and `getBytes`
+readback all work with no window server and no drawable — verified on an
+M4 Pro, correct pixels back.
+
+That settles the design rather than blocking it. `gpu.m` should render
+into an offscreen texture *always*, and then either present it to the
+layer's drawable when there is a window, or simply read it back when
+there is not. `gpu_read_pixels` becomes the primary path rather than an
+afterthought for `--screenshot`, and the renderer becomes testable with
+no window server at all — which is more than the SDL path can claim.
+
+The sprint's second unknown is separate: its *done when* asks that
+"`render.zig` contains no `SDL_` symbol", which cannot hold inside D0's
+own scope. `render.zig` owns `SDL_Init`, `SDL_CreateWindow`,
+`SDL_SetWindowTitle` and `SDL_GetWindowPixelDensity`, and this sprint
+explicitly runs "behind SDL's window", deferring the window to D4. The
+honest condition for D0 is that `render.zig` issues no SDL *drawing*
+call — no `SDL_Render*`, no `SDL_Texture` — with windowing left to D4.
+
 ### D1 — Own the rasterizer (two to three weeks)
 
 Replace FreeType with a TrueType parser and a rasterizer in Zig.
