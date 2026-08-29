@@ -8,28 +8,28 @@ parse: PTY bytes through vt.Parser into Terminal
 
   corpus           MiB/s     median      ns/byte  KiB/frame  what it is
   ----------- ---------- ---------- ------------ ----------  ----------------------------------------
-  ascii             51.5       50.2        18.51        879  plain source dump, no escapes
-  sgr              105.8      104.0         9.02       1805  colourised build log, dense SGR
-  scroll            25.5       25.2        37.39        435  short lines, scrolls every line
-  altscreen        126.7      124.9         7.53       2163  full-screen app redraw, absolute cursor
-  cjk               47.8       47.6        19.94        816  wide and multibyte text
+  ascii            103.7      101.1         9.19       1770  plain source dump, no escapes
+  sgr              165.8      160.2         5.75       2830  colourised build log, dense SGR
+  scroll            94.9       90.7        10.05       1620  short lines, scrolls every line
+  altscreen        128.7      123.6         7.41       2196  full-screen app redraw, absolute cursor
+  cjk              179.3      176.4         5.32       3060  wide and multibyte text
 
 scroll: ascii corpus vs terminal height (same bytes, taller screen)
 
   geometry         MiB/s     median       vs 80x24 KiB moved/LF
   ----------- ---------- ---------- -------------- ------------
-  80x24             49.8       48.7          1.00x           28
-  80x48             33.5       32.7          0.67x           58
-  80x100            18.7       18.5          0.38x          123
-  80x200            10.1       10.1          0.20x          248
+  80x24            101.1       96.6          1.00x           28
+  80x48            104.4      100.5          1.03x           58
+  80x100            99.9       97.4          0.99x          123
+  80x200           107.3      103.8          1.06x          248
 
 scan: full-grid read, the walk render.draw does every frame
 
   geometry       us/scan     median      ns/cell        KiB  scans per 60Hz frame
   ----------- ---------- ---------- ------------ ----------  ----------------------------------------
-  80x24              1.4        1.4         0.73         30  11850
-  120x40             3.4        3.5         0.70         75  4974
-  200x60             8.5        8.7         0.71        187  1950
-  400x100           28.5       29.0         0.71        625  585
+  80x24              1.4        1.4         0.71         30  12210
+  120x40             3.4        3.4         0.71         75  4911
+  200x60             8.5        8.5         0.71        187  1970
+  400x100           28.4       28.5         0.71        625  587
 
 checksum 102379730931
