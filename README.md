@@ -62,6 +62,7 @@ PTY ──► vt.Parser ──► Terminal ──► Renderer ──► SDL3 ─
 | `cli.zig` | Command-line options, and the bounds on anything the renderer will size a window from. |
 | `png.zig` | A small PNG encoder and decoder, so screenshots need no image library. |
 | `record.zig` | Records a command's terminal output, keystrokes and all, as a corpus. |
+| `redact.zig` | Secret shapes, redacted as a recording is written and checked in CI. |
 | `audit.zig` | What the corpora ask a terminal to do, beside what this one does about it. |
 
 Two threads: one reads the PTY and feeds the parser, the main thread draws.

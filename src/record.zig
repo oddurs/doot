@@ -21,6 +21,7 @@
 
 const std = @import("std");
 const Pty = @import("pty.zig").Pty;
+const redact = @import("redact.zig");
 
 /// Wide enough that an agent redrawing a full screen is not reshaped by the
 /// recording, and a common size for a real window.
@@ -193,6 +194,19 @@ pub fn main(init: std.process.Init.Minimal) !void {
     // idles reports the idle time, and its writes/s is the one number this
     // whole tool exists to produce.
     const elapsed = if (started) |s| last_read - s else 0;
+
+    // Redact before the corpus exists on disk, not after someone reads it.
+    // Agent CLIs print a startup banner, and the first pair of recordings
+    // reached a public repository carrying live session links because they
+    // were scanned rather than made incapable of carrying one.
+    var first: redact.Finding = undefined;
+    const secrets = redact.scrub(raw.items, &first);
+    if (secrets > 0) {
+        std.debug.print(
+            "redacted {d} secret(s) from the recording; first was a {s} at byte {d}\n",
+            .{ secrets, first.what, first.offset },
+        );
+    }
 
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = raw.items });
     const timing_path = try std.fmt.allocPrint(gpa, "{s}.timing", .{out_path});

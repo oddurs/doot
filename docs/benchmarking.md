@@ -113,6 +113,21 @@ stays comparable with one from a year from now. Regenerate them only to add a
 corpus or deliberately change one — doing so voids every baseline that came
 before.
 
+## Recordings carry whatever was on the screen
+
+A recorded corpus is a real program's output, and a real program prints
+banners, paths and session identifiers. `zig build record` redacts known
+secret shapes as it writes, and `zig build check-corpora` — which CI runs,
+and which **gates**, unlike the bench and the gallery — fails if a committed
+corpus contains one. Both use `src/redact.zig`, so the guard at the door and
+the check on the shelf cannot drift apart.
+
+Replacements are the same length as what they replace, because each `.bin`
+has a `.timing` sidecar recording how many bytes arrived in each read.
+
+It is a guard, not a guarantee: it knows the shapes it knows. Read a
+recording before committing it.
+
 ## Adding a corpus
 
 Add a generator to `bench/gen_corpus.py`, append it to the tuple in `main()`,
