@@ -45,7 +45,13 @@ const captures = [_]Capture{
     .{ .name = "attributes-14pt-1x", .scene = "attributes", .cols = 74, .rows = 5, .font_size = 14, .scale = 1 },
     .{ .name = "attributes-14pt-2x", .scene = "attributes", .cols = 74, .rows = 5, .font_size = 14, .scale = 2 },
 
+    // `colors` draws rectangles and no glyphs, which makes it the oracle for
+    // geometry, projection, the clear colour and channel order -- the things
+    // a renderer swap gets wrong. It is held to zero differing pixels, at
+    // both scales, where the nine scenes containing text cannot be.
     .{ .name = "colors-14pt-1x", .scene = "colors", .cols = 112, .rows = 7, .font_size = 14, .scale = 1 },
+    .{ .name = "colors-14pt-2x", .scene = "colors", .cols = 112, .rows = 7, .font_size = 14, .scale = 2 },
+
     .{ .name = "tui-14pt-1x", .scene = "tui", .cols = 52, .rows = 12, .font_size = 14, .scale = 1 },
 
     // The cursor gets its own scene at both scales: X0 is done when a

@@ -11,8 +11,8 @@ performance rule is that a claim carries a number or it is a guess; nothing
 above the renderer has a number, so visual work is judged by pictures
 instead.
 
-Ten captures render one canonical screen each through the real parser, grid
-and renderer, and are compared pixel by pixel against a committed PNG.
+Eleven captures render one canonical screen each through the real parser,
+grid and renderer, and are compared pixel by pixel against a committed PNG.
 
 ## What it measures
 
@@ -38,11 +38,18 @@ committed.
 
 ## How it runs headless
 
+**We always render offscreen; a window is an optional consumer.** Every frame
+is drawn into a `MTLTexture` that no display owns, and only then blitted to
+the window's drawable — if there is a window. `--screenshot` reads that
+texture back directly. So a capture is exactly what the renderer produced, it
+needs no screen-recording permission, and it does not need a window server.
+
 `SDL_VIDEODRIVER=dummy` — put into the child's environment by `gallery.zig`
-itself — gives SDL a video backend with no display, and `--screenshot` reads
-the frame back through `SDL_RenderReadPixels` *before* present. So a capture is exactly what the
-renderer produced, needs no screen-recording permission, and works on a CI
-runner. (The `offscreen` driver does not work; it fails to create a window.)
+itself — is what removes the window: under it `SDL_Metal_CreateView` returns
+null, there is no layer, and present becomes a no-op. Metal itself needs none
+of this; `MTLCreateSystemDefaultDevice` and an offscreen render target work
+with no window server at all. (The `offscreen` driver does not work either;
+it fails to create a window.)
 
 `--scale N` tells the app to pretend the display has that pixel density
 rather than asking it. That is the only way a 2× capture is reproducible on
@@ -89,7 +96,7 @@ taken from the final frame, so nothing needs to sleep. Add a row to
 commit the PNG along with the change that made it necessary.
 
 Keep captures small. They are committed and they stay in the history: the
-ten here are 152 KB in total.
+eleven here are 172 KB in total.
 
 ## When the references need regenerating
 
@@ -107,3 +114,13 @@ How large a delta: on the first CI run every capture's *size* matched, the
 scenes containing text differed by 1.1–2.6% of pixels. So the cross-machine
 difference is entirely glyph rasterization, and nothing else in the
 renderer. [D1](roadmap/dependencies.md) should take those nine to zero.
+
+[D0](roadmap/completed/sprint-d0-gpu-path.md) re-recorded the references
+against our own Metal renderer, and the same shape held on one machine: both
+`colors` captures stayed at **0 differing pixels** — which is why `colors` is
+now captured at 2× as well, so both scales have that oracle — while the nine
+scenes containing text moved by 1.8–5.9% of pixels at a worst channel delta
+of 4. Every one of those differing pixels is an antialiased glyph edge; no
+solid-fill interior moved. The references now carry GPU rounding rather than
+SDL's software renderer's integer truncation, which is what a user with a
+window open was seeing all along.

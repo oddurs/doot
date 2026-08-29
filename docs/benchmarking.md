@@ -40,7 +40,7 @@ zig build -Doptimize=ReleaseFast
 `--frame-stats` prints one line a second to stderr, and a totals line at exit:
 
 ```
-frame-stats   120 fps  lock  2/10  build  43/223  present  7915/9322 us  calls  2/2  pty  47.19 MiB/s
+frame-stats   120 fps  lock  1/5   build  44/78   drawable  7767/9596 us  calls  1/1  pty  68.72 MiB/s
 frame-stats  total: 636 frames in 5.32 s, 257368610 bytes from the pty at 46.18 MiB/s, worst lock hold 324 us
 ```
 
@@ -54,12 +54,15 @@ viewport.
 **`build`** — from releasing the lock to submitting the frame: vertex
 generation and draw calls. What Sprints 2 and 3 move.
 
-**`present`** — the wait for vblank inside `SDL_RenderPresent`. Roughly one
-refresh interval, and it should never appear inside `lock` again.
+**`drawable`** — the wait for the GPU to finish the frame plus the wait for a
+drawable to present it to. Roughly one refresh interval, and it should never
+appear inside `lock` again. It was called `present` until D0, when the wait
+stopped being SDL's and became ours.
 
-**`calls`** — SDL submission calls per frame. Two: a clear and one
-`SDL_RenderGeometryRaw` for everything. If this grows with the screen, the
-vertex path has been bypassed somewhere.
+**`calls`** — GPU submission calls per frame. One: the frame is a single
+indexed draw, and the clear is the render pass's load action rather than a
+call of its own. (It read two under SDL, where the clear was a call.) If this
+grows with the screen, the vertex path has been bypassed somewhere.
 
 **`pty`** — how fast the reader is draining the PTY.
 
@@ -69,9 +72,10 @@ real frames. `PASSES` sets how many times each corpus is written (default 16,
 which is 24 MiB). A window opens for the duration. `--size 200x60` picks the
 initial grid, for the large-window case.
 
-`--screenshot PATH` saves the frame drawn one second in as a BMP, read back
-through SDL before present — so what the renderer produced can be checked
-from a script, with no screen-capture permission involved.
+`--screenshot PATH` saves the frame drawn one second in as a PNG, read back
+out of the offscreen render target — so what the renderer produced can be
+checked from a script, with no screen-capture permission involved, and with
+no window at all.
 
 For scale, `script -q /dev/null bench/dump.sh > /dev/null` drains the same
 bytes through a PTY with no terminal attached — the cost of `cat` and the
