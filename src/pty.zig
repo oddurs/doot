@@ -25,7 +25,12 @@ pub const Pty = struct {
     pid: posix.pid_t,
     closed: bool = false,
 
-    pub const Error = error{ ForkFailed, WriteFailed };
+    pub const Error = error{ ForkFailed, WriteFailed, EmptyCommand, TooManyArgs };
+
+    /// As many arguments as `openCommand` will pass on. The copy has to
+    /// live on the child's stack, because allocating after fork is not
+    /// safe, so it is bounded -- generously, for a command line.
+    pub const max_argv = 64;
 
     /// Open a pty running the user's shell as a login shell.
     pub fn open(cols: u16, rows: u16, shell_override: ?[:0]const u8) !Pty {
@@ -37,7 +42,13 @@ pub const Pty = struct {
     ///
     /// The recorder needs this to run an agent CLI rather than a shell; the
     /// terminal itself only ever wants `open`.
+    ///
+    /// Both bounds are checked here rather than in the child: after fork
+    /// there is nothing useful to do with an error, and a truncated argv
+    /// would exec a command nobody asked for.
     pub fn openCommand(cols: u16, rows: u16, argv_slice: []const [*:0]const u8) !Pty {
+        if (argv_slice.len == 0) return Error.EmptyCommand;
+        if (argv_slice.len > max_argv) return Error.TooManyArgs;
         var ws = c.winsize{
             .ws_row = rows,
             .ws_col = cols,
@@ -76,10 +87,9 @@ pub const Pty = struct {
             // A null-terminated copy of argv on the child's stack. Bounded
             // rather than allocated: this runs after fork, where allocating
             // is not safe.
-            var argv_buf: [64:null]?[*:0]const u8 = @splat(null);
-            const n = @min(argv_slice.len, argv_buf.len);
-            for (argv_slice[0..n], 0..) |a, i| argv_buf[i] = a;
-            argv_buf[n] = null;
+            var argv_buf: [max_argv:null]?[*:0]const u8 = @splat(null);
+            for (argv_slice, 0..) |a, i| argv_buf[i] = a;
+            argv_buf[argv_slice.len] = null;
             _ = c.execvp(argv_slice[0], @ptrCast(@constCast(&argv_buf)));
 
             // execvp only returns on failure. _exit, not exit: we must not

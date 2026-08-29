@@ -46,6 +46,10 @@ const Status = enum {
 const Known = struct {
     /// The private-marker byte, 0 for none.
     private: u8 = 0,
+    /// The first intermediate byte, 0 for none. `CSI SP @` is SL, not ICH;
+    /// `terminal.zig` reads neither this nor the private marker, so a
+    /// sequence carrying one lands on the arm for the plain final byte.
+    intermediate: u8 = 0,
     final: u8,
     status: Status,
     what: []const u8,
@@ -146,6 +150,30 @@ const known_csi = [_]Known{
     .{ .private = '?', .final = 'J', .status = .ignored, .what = "DECSED selective erase" },
     .{ .private = '?', .final = 'K', .status = .ignored, .what = "DECSEL selective erase" },
     .{ .private = '>', .final = 'K', .status = .ignored, .what = "xterm key resource" },
+
+    // Intermediate-bearing forms. `csiDispatch` reads neither the private
+    // marker nor the intermediates, so these run the plain final byte's arm.
+    .{
+        .intermediate = ' ',
+        .final = '@',
+        .status = .mishandled,
+        .what = "SL scroll left",
+        .note = "runs ICH: inserts blanks instead of scrolling",
+    },
+    .{
+        .intermediate = ' ',
+        .final = 'A',
+        .status = .mishandled,
+        .what = "SR scroll right",
+        .note = "runs CUU: moves the cursor instead of scrolling",
+    },
+    .{
+        .intermediate = ' ',
+        .final = 'q',
+        .status = .ignored,
+        .what = "DECSCUSR cursor shape",
+        .note = "wanted by X3",
+    },
 };
 
 const known_osc = [_]struct { code: u16, status: Status, what: []const u8, note: []const u8 = "" }{
@@ -172,16 +200,16 @@ const Seen = struct {
 
 /// Tallies rather than acts. The parser cannot tell the difference.
 const Tally = struct {
-    csi: std.AutoHashMapUnmanaged(u16, Seen) = .empty,
+    csi: std.AutoHashMapUnmanaged(u32, Seen) = .empty,
     osc: std.AutoHashMapUnmanaged(u16, Seen) = .empty,
-    esc: std.AutoHashMapUnmanaged(u16, Seen) = .empty,
+    esc: std.AutoHashMapUnmanaged(u32, Seen) = .empty,
     executes: std.AutoHashMapUnmanaged(u8, Seen) = .empty,
     printed: u64 = 0,
     alloc: std.mem.Allocator,
     bit: u32 = 0,
 
-    fn key(private: u8, final: u8) u16 {
-        return (@as(u16, private) << 8) | final;
+    fn key(private: u8, intermediate: u8, final: u8) u32 {
+        return (@as(u32, private) << 16) | (@as(u32, intermediate) << 8) | final;
     }
 
     fn bump(self: *Tally, map: anytype, k: anytype) void {
@@ -202,10 +230,14 @@ const Tally = struct {
         self.bump(&self.executes, b);
     }
     pub fn escDispatch(self: *Tally, intermediates: []const u8, final: u8) void {
-        self.bump(&self.esc, key(if (intermediates.len > 0) intermediates[0] else 0, final));
+        self.bump(&self.esc, key(0, if (intermediates.len > 0) intermediates[0] else 0, final));
     }
     pub fn csiDispatch(self: *Tally, csi: vt.Csi) void {
-        self.bump(&self.csi, key(csi.private, csi.final));
+        self.bump(&self.csi, key(
+            csi.private,
+            if (csi.intermediates.len > 0) csi.intermediates[0] else 0,
+            csi.final,
+        ));
     }
     pub fn oscDispatch(self: *Tally, data: []const u8) void {
         const semi = std.mem.indexOfScalar(u8, data, ';') orelse data.len;
@@ -214,9 +246,19 @@ const Tally = struct {
     }
 };
 
-fn csiStatus(private: u8, final: u8) ?Known {
+/// How many distinct sequences a single corpus contributed.
+fn distinctIn(map: anytype, bit: u32) usize {
+    var n: usize = 0;
+    var it = map.iterator();
+    while (it.next()) |e| {
+        if (e.value_ptr.corpora & bit != 0) n += 1;
+    }
+    return n;
+}
+
+fn csiStatus(private: u8, intermediate: u8, final: u8) ?Known {
     for (known_csi) |k| {
-        if (k.private == private and k.final == final) return k;
+        if (k.private == private and k.intermediate == intermediate and k.final == final) return k;
     }
     return null;
 }
@@ -240,19 +282,22 @@ pub fn main() !void {
 
     for (corpora, 0..) |corpus, i| {
         tally.bit = @as(u32, 1) << @intCast(i);
-        const before_csi = tally.csi.count();
-        const before_osc = tally.osc.count();
-        const before_esc = tally.esc.count();
-
         var parser: vt.Parser = .{};
         parser.feed(&tally, corpus.bytes);
+    }
 
+    // Per corpus, from the bitmask each entry carries. Counting "new since
+    // the last corpus" instead would report zero for every corpus after the
+    // first, and read as though the generated corpora contain no escapes at
+    // all -- `sgr` alone has twenty thousand SGR sequences.
+    for (corpora, 0..) |corpus, i| {
+        const bit = @as(u32, 1) << @intCast(i);
         std.debug.print("  {s:<14} {d:>10} {d:>8} {d:>8} {d:>8}\n", .{
             corpus.name,
             corpus.bytes.len,
-            tally.csi.count() - before_csi,
-            tally.osc.count() - before_osc,
-            tally.esc.count() - before_esc,
+            distinctIn(&tally.csi, bit),
+            distinctIn(&tally.osc, bit),
+            distinctIn(&tally.esc, bit),
         });
     }
 
@@ -265,15 +310,19 @@ pub fn main() !void {
 
     var it = tally.csi.iterator();
     while (it.next()) |entry| {
-        const private: u8 = @intCast(entry.key_ptr.* >> 8);
+        const private: u8 = @intCast((entry.key_ptr.* >> 16) & 0xff);
+        const intermediate: u8 = @intCast((entry.key_ptr.* >> 8) & 0xff);
         const final: u8 = @truncate(entry.key_ptr.*);
-        var name: [16]u8 = undefined;
-        const seq = if (private != 0)
-            std.fmt.bufPrint(&name, "CSI {c} {c}", .{ private, final }) catch continue
-        else
-            std.fmt.bufPrint(&name, "CSI {c}", .{final}) catch continue;
+        var name: [20]u8 = undefined;
+        const seq = std.fmt.bufPrint(&name, "CSI{s}{c}{s}{c} {c}", .{
+            if (private != 0) " " else "",
+            if (private != 0) private else ' ',
+            if (intermediate != 0) " " else "",
+            if (intermediate != 0) intermediate else ' ',
+            final,
+        }) catch continue;
 
-        if (csiStatus(private, final)) |k| {
+        if (csiStatus(private, intermediate, final)) |k| {
             if (k.status == .mishandled) mishandled += 1;
             std.debug.print("  {s:<12} {d:>9}  {s:<12}  {s:<26}  {s}\n", .{
                 seq, entry.value_ptr.count, k.status.label(), k.what, k.note,
@@ -295,9 +344,12 @@ pub fn main() !void {
             if (k.code != code) continue;
             found = true;
             if (k.status == .mishandled) mishandled += 1;
+            var label: [12]u8 = undefined;
+            const name = std.fmt.bufPrint(&label, "OSC {d}", .{code}) catch "OSC";
             std.debug.print("  {s:<12} {d:>9}  {s:<12}  {s:<26}  {s}\n", .{
-                "OSC", entry.value_ptr.count, k.status.label(), k.what, k.note,
+                name, entry.value_ptr.count, k.status.label(), k.what, k.note,
             });
+            break;
         }
         if (!found) {
             unlisted += 1;

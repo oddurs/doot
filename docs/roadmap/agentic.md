@@ -53,10 +53,16 @@ in this terminal on startup, and moves the cursor on exit. Tracked as
 forms get implemented properly rather than merely stopped from firing.
 
 Everything else the recordings contain — `CUP`, `EL`, `SGR`, `ED`, `CHA`,
-`DECSTBM`, `DEC` set/reset mode, `DA`, OSC 0/2 — is handled. There were no
+`DECSTBM`, `DEC` set/reset mode, `DA`, OSC 0 — is handled. There were no
 unlisted sequences, which is the other thing the audit is for: a new agent
 version emitting something new shows up as a question rather than as
 silence.
+
+The same blindness has a second family. `csiDispatch` reads the
+*intermediates* no more than it reads the private marker, so `CSI SP @`
+(SL, scroll left) runs ICH and `CSI SP A` (SR, scroll right) runs CUU.
+Neither appears in today's recordings, so both are listed rather than
+counted — but they are the same bug as `CSI > 4 m` and #28 covers them.
 
 ## The shape of agent output
 

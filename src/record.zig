@@ -127,6 +127,11 @@ pub fn main(init: std.process.Init.Minimal) !void {
             } else if (std.mem.eql(u8, a, "--stop-after") and i + 1 < sep.?) {
                 i += 1;
                 stop_after_ms = try std.fmt.parseInt(u64, std.mem.span(argv[i]), 10);
+            } else {
+                // Silently ignoring an option means a recording that runs
+                // to the idle timeout with no keystrokes and no clue why.
+                std.debug.print("record: unrecognised option '{s}'\n", .{a});
+                std.process.exit(2);
             }
         }
     }
@@ -142,6 +147,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     var buf: [65536]u8 = undefined;
     var started: ?u64 = null;
+    var last_read: u64 = 0;
     var reads: u64 = 0;
     var next_key: usize = 0;
     const begin = nowNs();
@@ -172,6 +178,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
         const now = nowNs();
         if (started == null) started = now;
+        last_read = now;
         try raw.appendSlice(gpa, buf[0..n]);
         // One line per read, because a read boundary is a write boundary:
         // it is what the terminal is actually handed at once.
@@ -181,7 +188,11 @@ pub fn main(init: std.process.Init.Minimal) !void {
         reads += 1;
     }
 
-    const elapsed = if (started) |s| nowNs() - s else 0;
+    // From the first byte to the last, not to whenever the recorder
+    // stopped waiting: otherwise a program that dumps a megabyte and then
+    // idles reports the idle time, and its writes/s is the one number this
+    // whole tool exists to produce.
+    const elapsed = if (started) |s| last_read - s else 0;
 
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = raw.items });
     const timing_path = try std.fmt.allocPrint(gpa, "{s}.timing", .{out_path});

@@ -94,6 +94,28 @@ becomes a question rather than silence.
 
 Today: 14 distinct CSI forms, 1 OSC, 2 mis-handled, 0 unlisted.
 
+Review found the tool's own blind spot: it keyed only on the private marker
+and the final byte, so an *intermediate*-bearing sequence — `CSI SP @` is SL,
+not ICH — was reported as `handled` when the terminal runs the wrong arm for
+it, the very defect the audit exists to surface. It keys on the intermediate
+now, and SL, SR and DECSCUSR are in the table.
+
+## Recordings are not safe to commit unread
+
+Review also found what my own scan had not: both recordings embedded **live
+`https://claude.ai/code/session_…` deep links**, along with the account's
+plan tier and its MCP and plugin state. I had grepped for API keys, tokens,
+emails and home paths and found nothing, and concluded the recordings were
+clean — the wrong conclusion from a pattern list that did not include the
+thing that was there.
+
+The session identifiers are scrubbed with same-length placeholders, so every
+`.timing` byte count still describes its `.bin` exactly and the bench and
+audit numbers do not move. The lesson is the general one: a recording of a
+real tool captures whatever that tool happened to print, and the only safe
+review of one is to *read it*, not to search it for the problems you already
+thought of.
+
 ## Done when
 
 > the corpora are committed, `zig build bench` reports them alongside the
