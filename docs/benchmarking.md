@@ -1,0 +1,86 @@
+# Benchmarking
+
+```sh
+zig build bench                    # run them
+zig build bench > bench/baseline.txt   # re-record the baseline
+```
+
+Needs neither SDL nor a window: `vt`, `grid` and `terminal` import nothing but
+`std`. Always builds ReleaseFast regardless of `-Doptimize`, because a
+benchmark that silently reports a Debug number is worse than no benchmark.
+
+## What it measures
+
+**`parse`** — bytes from a PTY through `vt.Parser` into `Terminal`. The whole
+stack below the renderer, which is where a terminal spends its time when
+something dumps output at it.
+
+**`scroll`** — the same corpus against a taller and taller screen. A controlled
+experiment rather than a measurement: it is what identified the scroll memmove
+as the parse bottleneck, and it now stands as the regression test for the fix.
+**These rows should read flat.** If the curve slopes again, the fast path in
+`Screen.scrollUp` has stopped firing.
+
+**`scan`** — a full-grid read, the walk `render.draw` performs every frame.
+
+## What it cannot measure
+
+Anything above the renderer. The harness is headless, so the mutex is never
+contended and no draw call is ever issued — the vsync-inside-the-lock and
+per-glyph-state-change findings are invisible to it. Those need a frame timer
+in the real app.
+
+## Reading the numbers
+
+Best-of and median are both reported. Best-of is the honest figure for "how
+fast can this go" — the run least polluted by whatever else the machine was
+doing. **A median far from best means the run was noisy and should not be
+trusted.**
+
+Run-to-run variance on a quiet machine is 3–5%. Treat anything under 5% as
+noise; a real win is visible without squinting.
+
+`bench/baseline.txt` is the number to beat. CI also runs the benchmarks on
+every PR and writes them to the job summary and the log, but that job is
+**non-gating** — a shared runner is far too noisy to decide a regression.
+
+## The corpora
+
+Six files under `bench/corpus/`, 256 KiB each.
+
+| corpus | what it is |
+|---|---|
+| `ascii` | plain source dump, no escapes |
+| `sgr` | colourised build log, dense SGR |
+| `scroll` | short lines, scrolls every line |
+| `altscreen` | full-screen app redraw, absolute cursor addressing |
+| `cjk` | wide and multibyte text |
+| `region` | DECSTBM region + status line, as vim/less/tmux set |
+
+They are **committed files, not generated at run time**, so a number from today
+stays comparable with one from a year from now. Regenerate them only to add a
+corpus or deliberately change one — doing so voids every baseline that came
+before.
+
+## Adding a corpus
+
+Add a generator to `bench/gen_corpus.py`, append it to the tuple in `main()`,
+then:
+
+```sh
+python3 bench/gen_corpus.py
+```
+
+Each corpus is seeded independently, so a new one does not shift the bytes of
+the existing ones — verify that with `shasum -a 256 bench/corpus/*.bin` before
+and after. Then register it in the `corpora` array in `src/bench.zig` and in
+`corpus_names` in `build.zig`.
+
+`region` was added this way after the fact, and the other five stayed
+byte-identical.
+
+## Proposing performance work
+
+Bring a corpus and a number, not an argument. The roadmap was written once from
+reading the source, and the largest bottleneck in the program was not on it —
+see [the Sprint 0 record](roadmap/completed/sprint-0-benchmarks.md).

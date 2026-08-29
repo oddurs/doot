@@ -26,11 +26,9 @@ zig fmt build.zig src/            # before every commit
 ```
 
 `zig build bench` needs neither SDL nor a window — `vt`, `grid` and
-`terminal` import nothing but `std`. The corpora under `bench/corpus/` are
-committed files so a number from today is comparable with one from a year
-ago; regenerate them only to add or deliberately change one, since doing so
-voids every baseline that came before. `bench/baseline.txt` is the number to
-beat.
+`terminal` import nothing but `std`. `bench/baseline.txt` is the number to
+beat. See [docs/benchmarking.md](docs/benchmarking.md) for what it measures,
+what it cannot, and how to add a corpus.
 
 ## What the code expects of you
 
@@ -77,10 +75,11 @@ For **features**, the README's "Not done yet" list is roughly ordered by how
 much people miss them. Selection and copy is the biggest gap; combining marks
 and ligatures are the deepest.
 
-For **performance**, [ROADMAP.md](ROADMAP.md) sequences six sprints against
-bottlenecks located in the source, and says why they are in that order. Start
-with the numbers from `zig build bench` — a perf PR without a before-and-after
-is hard to review and easy to get wrong.
+For **performance**, [docs/roadmap/](docs/roadmap/) sequences the sprints and
+says why they are in that order. Start with the numbers from `zig build bench`
+— a perf PR without a before-and-after is hard to review and easy to get
+wrong, and [docs/benchmarking.md](docs/benchmarking.md) explains how to read
+them.
 
 Before starting something large, open an issue and say what you plan to do —
 it is a small project and it would be a shame to duplicate work.
