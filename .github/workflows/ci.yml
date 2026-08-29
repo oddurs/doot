@@ -22,11 +22,12 @@ jobs:
   format:
     name: zig fmt
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: mlugg/setup-zig@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
         with:
-          version: ${{ env.ZIG_VERSION }}
+          zig-version: ${{ env.ZIG_VERSION }}
       - name: Check formatting
         run: zig fmt --check build.zig src/
 
@@ -47,6 +48,7 @@ jobs:
   test:
     name: ${{ matrix.optimize }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -55,16 +57,12 @@ jobs:
         os: [macos-15, macos-14]
         optimize: [Debug, ReleaseFast]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install SDL3 and FreeType
-        run: |
-          brew update --quiet
-          brew install sdl3 freetype pkg-config
-
-      - uses: mlugg/setup-zig@v2
+      - uses: ./.github/actions/setup
         with:
-          version: ${{ env.ZIG_VERSION }}
+          zig-version: ${{ env.ZIG_VERSION }}
+          libraries: 'true'
 
       - name: Build
         run: zig build -Doptimize=${{ matrix.optimize }} --summary all
@@ -77,6 +75,7 @@ jobs:
   bench:
     name: bench
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Never gates a merge. A shared CI runner is far too noisy to decide
     # whether a change is a regression -- the job exists so the numbers show
     # up next to the diff, and so an order-of-magnitude mistake is visible
@@ -84,11 +83,11 @@ jobs:
     # on a quiet machine, remains the number to beat.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: mlugg/setup-zig@v2
+      - uses: ./.github/actions/setup
         with:
-          version: ${{ env.ZIG_VERSION }}
+          zig-version: ${{ env.ZIG_VERSION }}
 
       - name: Run benchmarks
         # No SDL and no window: vt, grid and terminal import nothing but std.
@@ -112,6 +111,7 @@ jobs:
   gallery:
     name: gallery
     runs-on: macos-15
+    timeout-minutes: 20
     # Never gates a merge, for the same reason the bench does not: a visual
     # diff is usually an intended change, and the reviewer is the one who
     # decides. The job exists so the numbers and the renders sit next to
@@ -123,16 +123,12 @@ jobs:
     # the percentages.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install SDL3 and FreeType
-        run: |
-          brew update --quiet
-          brew install sdl3 freetype pkg-config
-
-      - uses: mlugg/setup-zig@v2
+      - uses: ./.github/actions/setup
         with:
-          version: ${{ env.ZIG_VERSION }}
+          zig-version: ${{ env.ZIG_VERSION }}
+          libraries: 'true'
 
       - name: Render the gallery
         # Headless: the build step sets SDL_VIDEODRIVER=dummy, so this
@@ -151,7 +147,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: gallery-renders
           path: bench/gallery/current/*.png

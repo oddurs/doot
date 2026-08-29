@@ -1,0 +1,30 @@
+name: Set up the toolchain
+description: >-
+  Zig at the version the workflow pins, and -- on a macOS runner that will
+  open a window -- the two libraries the window still borrows: SDL3 and
+  FreeType from Homebrew. Both go away with D1 and D4 on
+  docs/roadmap/dependencies.md; until then every job that builds the app
+  installs them the same way, and this is the one place that way is written.
+
+inputs:
+  zig-version:
+    description: The Zig version to install; the workflow's ZIG_VERSION.
+    required: true
+  libraries:
+    description: Install SDL3 and FreeType via Homebrew. macOS runners only.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Install SDL3 and FreeType
+      if: inputs.libraries == 'true'
+      shell: bash
+      run: |
+        brew update --quiet
+        brew install sdl3 freetype pkg-config
+
+    - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+      with:
+        version: ${{ inputs.zig-version }}

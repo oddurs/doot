@@ -3,7 +3,10 @@ updates:
   # Zig dependencies live in build.zig.zon, which Dependabot does not yet
   # understand. Actions are what it can keep current here.
   - package-ecosystem: github-actions
-    directory: /
+    # The workflows, and the composite action they share.
+    directories:
+      - /
+      - /.github/actions/*
     schedule:
       interval: weekly
     commit-message:
