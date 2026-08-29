@@ -23,7 +23,7 @@ with before-and-after captures at 1× and 2×, or it is not reviewed.
 | Missing glyphs | Cached as an empty box and **drawn as nothing**. Emoji, Nerd Font icons and most symbols vanish silently | `Atlas.get`, the `orelse` arm |
 | Atlas | One 1024² RGBA page. Full is an error the renderer swallows, so the glyph is re-rasterized **every frame** and never drawn | `alloc_rect` → `Error.AtlasFull`; `Renderer.glyph` `catch return` |
 | Box drawing, blocks, braille, powerline | From the font, so seams appear at fractional scales and glyphs the face lacks are missing | — |
-| Blending | Alpha blend in sRGB space via SDL; no gamma correction, no stem darkening | `SDL_BLENDMODE_BLEND` |
+| Blending | **Linear light**, since [D0](dependencies.md)'s second commit: an `_sRGB` drawable, colours linearised on the way in. No stem darkening | `gpu.m` `kTargetFormat`; `shader.metal` `srgb_to_linear` |
 | Cursor | Block, no blink, hollow when unfocused; DECSCUSR ignored | `cursorQuads`; `csiDispatch` note |
 | Blink attribute | Parsed into `Attrs.blink`, **never rendered** | no reader in `render.zig` |
 | Underline | Single, one colour; no curly, double, dotted or coloured (SGR 4:x, 58) | `Renderer.glyph` |
@@ -84,16 +84,20 @@ streams, which [A0](agentic.md) produces.
   rounded once, with an optional line-height multiplier; the baseline
   placed so that underscores and descenders are never clipped at any size
   from 6 to 72 pt. The gallery's three sizes catch this.
-- **Weight.** Blending in linear light arrives with
-  [D0](dependencies.md)'s second commit — an sRGB drawable format makes
-  the hardware do it — so this sprint's job is to *measure* it and add
-  the optional stem-darkening step if the number says so. The measure:
-  mean stroke coverage of the typography page against a CoreText
-  rendering of the same text at the same size (CoreText as oracle, never
-  linked), and against a Terminal.app screenshot. Light-on-dark text in
-  sRGB blending reads thinner than the same face in a native app; this is
-  the difference people describe as "the font looks wrong" without being
-  able to say why.
+- **Weight.** Blending in linear light **arrived** with
+  [D0](completed/sprint-d0-gpu-path.md)'s second commit — an sRGB drawable
+  format makes the hardware do it. That closed most of the gap on its own:
+  the renderer had been laying down 70–89% of the coverage the rasterizer
+  produced, worst at 10pt 1×, and now lays down all of it. So this sprint's
+  job is what is left: *measure* the remainder and add the optional
+  stem-darkening step if the number says so. The measure: mean stroke
+  coverage of the typography page against a CoreText rendering of the same
+  text at the same size (CoreText as oracle, never linked), and against a
+  Terminal.app screenshot.
+- **`dim` is still a lerp in sRGB byte space**, and it is now the last
+  colour arithmetic in the program that is. D0 left it deliberately so its
+  own diff stayed attributable; retuning it is this sprint's, and it wants
+  the same before/after picture everything else here gets.
 - **Hinting.** None, by construction: [D1](dependencies.md)'s rasterizer
   does not hint, and neither does the platform. The gallery shows whether
   anyone can tell.

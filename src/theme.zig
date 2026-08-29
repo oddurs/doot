@@ -83,7 +83,79 @@ pub const default: Theme = .{
     }),
 };
 
+/// The sRGB electro-optical transfer function: an sRGB-encoded channel in
+/// 0..1, linear light out.
+///
+/// Every colour in this file is an sRGB byte triple, which is what a theme
+/// entry, an xterm palette index and an SGR truecolour escape all are. The
+/// render target is `BGRA8Unorm_sRGB`, so the hardware encodes whatever the
+/// pipeline writes and every colour reaching it has to be linear first.
+/// Vertex colours get this in `shader.metal`; the clear colour does not
+/// pass through a shader at all -- it goes straight into `MTLClearColor` --
+/// so `render.zig` applies it here instead.
+///
+/// It lives beside the palette rather than in the renderer because it is a
+/// property of the colour space those bytes are written in, not of how they
+/// are drawn, and because here it can be tested without a window.
+pub fn srgbToLinear(x: f32) f32 {
+    // The piecewise curve, not the 2.2 power approximation: the linear
+    // segment near black is what keeps a dark theme's background from
+    // shifting, and it is one branch.
+    if (x <= 0.04045) return x / 12.92;
+    return std.math.pow(f32, (x + 0.055) / 1.055, 2.4);
+}
+
 const testing = std.testing;
+
+test "srgbToLinear matches the sRGB curve at its landmarks" {
+    // The endpoints are exact by construction, and a transfer function that
+    // moves either of them would wash out or crush the whole image.
+    try testing.expectEqual(@as(f32, 0.0), srgbToLinear(0.0));
+    try testing.expectApproxEqAbs(@as(f32, 1.0), srgbToLinear(1.0), 1e-6);
+
+    // The knee: both branches must agree where they meet, or there is a
+    // visible step in the darkest few codes.
+    try testing.expectApproxEqAbs(@as(f32, 0.0031308), srgbToLinear(0.04045), 1e-6);
+
+    // Points along the curved branch, from the definition. The knee value
+    // above does *not* pin these down: move the knee up and every one of
+    // them silently takes the straight branch instead, which is the one
+    // mutant a landmarks-only test let through.
+    try testing.expectApproxEqAbs(@as(f32, 0.0100228), srgbToLinear(0.10), 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 0.0508761), srgbToLinear(0.25), 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 0.2140411), srgbToLinear(0.50), 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 0.5225216), srgbToLinear(0.75), 1e-5);
+
+    // Mid grey. 0x80/255 is 0.50196 encoded and ~0.2158 linear -- the
+    // number that makes gamma-correct blending look different at all, and
+    // the one a 2.2-power approximation would get wrong in the third digit.
+    try testing.expectApproxEqAbs(@as(f32, 0.21586), srgbToLinear(128.0 / 255.0), 1e-4);
+
+    // Below the knee it is a straight line, so doubling the input doubles
+    // the output exactly. An accidental `pow` on this branch would not.
+    try testing.expectApproxEqAbs(
+        2 * srgbToLinear(0.01),
+        srgbToLinear(0.02),
+        1e-7,
+    );
+
+    // Monotonic and continuous across the whole range, including across the
+    // knee. Not monotonic is a banding artefact waiting to happen, and it
+    // is what a sign error produces; not continuous is a visible step, and
+    // it is what a misplaced knee produces. The curve's steepest slope is
+    // ~2.28 at white, so one code apart is ~0.009 apart at most -- 0.02
+    // leaves room for that and none for a step.
+    var prev: f32 = -1.0;
+    for (0..256) |i| {
+        const v = srgbToLinear(@as(f32, @floatFromInt(i)) / 255.0);
+        try testing.expect(v > prev);
+        try testing.expect(v <= 1.0);
+        if (i > 0) try testing.expect(v - prev < 0.02);
+        // Linear light is never *brighter* than the code that encodes it.
+        try testing.expect(v <= @as(f32, @floatFromInt(i)) / 255.0 + 1e-6);
+        prev = v;
+    }
+}
 
 test "palette cube and ramp land on the xterm values" {
     const p = default.palette;

@@ -90,6 +90,16 @@ static void wait_for_pending(GpuState *s) {
     }
 }
 
+/// One constant for the target, the pipeline's colour attachment and the
+/// layer, which must agree: a layer that quietly disagreed would make the
+/// *window* wrong while every offscreen gallery capture stayed green.
+///
+/// `_sRGB` decodes the destination before blending -- gamma-correct text --
+/// and *encodes everything the pipeline writes*, which is why
+/// `shader.metal` linearises vertex colours and `render.zig` the clear
+/// colour. The stored bytes stay sRGB, so `gpu_read_pixels` is unaffected.
+static const MTLPixelFormat kTargetFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+
 /// (Re)make the offscreen render target. Shared storage so `getBytes:` can
 /// read it back with no blit and no `synchronizeTexture:`; see the unified
 /// memory check in `gpu_create`.
@@ -99,7 +109,7 @@ static int make_target(GpuState *s, uint32_t width, uint32_t height) {
     if (s.target != nil && s.width == width && s.height == height) return 0;
 
     MTLTextureDescriptor *td =
-        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:kTargetFormat
                                                            width:width
                                                           height:height
                                                        mipmapped:NO];
@@ -175,9 +185,11 @@ GpuContext *gpu_create(void *layer, uint32_t width, uint32_t height, uint32_t at
         pd.fragmentFunction = fragment_fn;
 
         MTLRenderPipelineColorAttachmentDescriptor *ca = pd.colorAttachments[0];
-        ca.pixelFormat = MTLPixelFormatBGRA8Unorm;
-        // Premultiplied: the fragment shader has already multiplied colour by
-        // alpha, so the source factor is One rather than SourceAlpha.
+        ca.pixelFormat = kTargetFormat;
+        // Premultiplied, and now in linear light: the fragment shader has
+        // already multiplied colour by alpha, so the source factor is One
+        // rather than SourceAlpha, and `_sRGB` means the add is between
+        // linear values rather than between sRGB codes.
         ca.blendingEnabled = YES;
         ca.rgbBlendOperation = MTLBlendOperationAdd;
         ca.alphaBlendOperation = MTLBlendOperationAdd;
@@ -206,6 +218,8 @@ GpuContext *gpu_create(void *layer, uint32_t width, uint32_t height, uint32_t at
             return NULL;
         }
 
+        // Not `_sRGB`, deliberately, even though the target is: the atlas
+        // carries glyph *coverage*, and coverage is linear already.
         MTLTextureDescriptor *ad =
             [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
                                                                width:atlas_size
@@ -230,7 +244,7 @@ GpuContext *gpu_create(void *layer, uint32_t width, uint32_t height, uint32_t at
         if (layer != NULL) {
             CAMetalLayer *l = (__bridge CAMetalLayer *)layer;
             l.device = s.device;
-            l.pixelFormat = MTLPixelFormatBGRA8Unorm;
+            l.pixelFormat = kTargetFormat;
             // A drawable that is only ever a render target cannot be the
             // destination of a blit, and a blit is exactly how the offscreen
             // texture reaches it.
