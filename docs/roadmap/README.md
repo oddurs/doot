@@ -42,6 +42,10 @@ thing that decides whether a sprint is done — and opens by building it.
   search over time, the transcript, sessions as files, the window as a
   client. Judged by materialization — any screen reproduced from the
   log, bit-identical.
+- [config.md](config.md) — one file, every setting, Ghostty's model;
+  `Cmd ,` opens it in a tab; themes and keybinds as config. Judged by one
+  source of truth: parser, flags, help, template and docs derived from
+  one struct.
 
 ## Completed and retired
 

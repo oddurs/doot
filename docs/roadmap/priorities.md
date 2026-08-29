@@ -55,6 +55,7 @@ decides whether a sprint is done. A claim without one is labelled a guess.
 | [testing.md](testing.md) | The layers, the differential model, fuzzing, replay, gating the bench, CI hygiene | CI under five minutes with every arbiter in it | T |
 | [compatibility.md](compatibility.md) | Linux, Windows, the browser; what "platform" means on each; the program matrix | The CI matrix and the compatibility matrix | M |
 | [record.md](record.md) | The log as the primary object: recording, checkpoints and seek, search over time, the transcript, sessions as files, the window as a client | Materialization — any screen reproduced from the log, bit-identical | L |
+| [config.md](config.md) | One file, every setting; `Cmd ,` opens it in a tab; themes and keybinds as config; the reference generated | One source of truth — parser, flags, help, template and docs derived from one struct | K |
 
 ## The one rule, generalised
 
@@ -89,6 +90,9 @@ one this repository has already had twice
      └──► E3 search          E5 config ──► X4 theme, E6 keys
 
  C0 harness ──► C1 sequences, C2 unicode ──► C3 terminfo
+
+ K0 config ──► K1 feedback ──► K3 themes (X4), K4 keybinds (E6), K5 reference (W1)
+                  └──► A5 tabs ──► K2 Cmd-, in a tab
 
  L0 record ──► L1 seek ──► L2 search, L4 files ──► M4 player ──► W5 player page
                  │
@@ -149,8 +153,8 @@ unmade by moving A3 up to row 5.
 
 After that: D5 + P0 (one binary, the bundle — the moment a second person
 should try it), L3 the transcript, A7 the supervisor view, E2 mouse, X1
-typography, E5 config, A5 tabs, C1 sequences, P1 signing — in whichever
-order the previous twelve have made most urgent.
+typography, A5 tabs and then K2 (`Cmd ,` in a tab), C1 sequences, P1
+signing — in whichever order the previous twelve have made most urgent.
 
 Five roadmaps run beside the order rather than in it, each with one
 sprint that should happen early because it is short and fences
@@ -169,6 +173,10 @@ everything after it:
   checksum the bench already prints, asserted.
 - [M0](compatibility.md), half a week: the core builds for Linux,
   Windows and wasm today; a CI row per target keeps it so.
+- [K0](config.md), a week, before the first sprint that needs a key —
+  L0's retention, S1's paste guard, A1's bell behaviour, X3's cursor
+  style, X4's theme all do. One struct that the parser, the flags,
+  `--help` and the template derive from.
 - [W0](website.md), a week, any time after V0: the `--screenshot` flag
   means the site can carry a real frame today. W4, the launch, is gated
   on the 0.5 release.
