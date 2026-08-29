@@ -62,7 +62,7 @@ pub fn build(b: *std.Build) void {
     // a number from today is comparable with one from six months ago. They
     // are embedded rather than opened so the bench does not care where it
     // was invoked from. See bench/gen_corpus.py.
-    const corpus_names = [_][]const u8{ "ascii", "sgr", "scroll", "altscreen", "cjk" };
+    const corpus_names = [_][]const u8{ "ascii", "sgr", "scroll", "altscreen", "cjk", "region" };
     inline for (corpus_names) |name| {
         bench_mod.addAnonymousImport("corpus_" ++ name, .{
             .root_source_file = b.path("bench/corpus/" ++ name ++ ".bin"),
