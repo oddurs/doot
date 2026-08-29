@@ -39,6 +39,8 @@ decides whether a sprint is done. A claim without one is labelled a guess.
 | [correctness.md](correctness.md) | VT conformance, Unicode, identity, robustness, the test infrastructure | esctest, vttest, the fuzzer | C |
 | [platform.md](platform.md) | App bundle, signing, distribution, updates, diagnostics | A fresh Mac, downloaded and opened | P |
 | [dependencies.md](dependencies.md) | Own the GPU path, the rasterizer, the shaper, the window; one binary | `otool -L` and the gallery | D |
+| [releases.md](releases.md) | What a version promises, the release train, milestones, notes, support | The tag | V |
+| [website.md](website.md) | The marketing site on GitHub Pages, rendered from what the repository produces | A fresh visitor and Lighthouse | W |
 
 ## The one rule, generalised
 
@@ -128,6 +130,13 @@ unmade by moving A3 up to row 5.
 After that: X1 typography (the format flip already happened in D0; this
 is faces and metrics), E5 config, A5 tabs, C1 sequences, P1 signing — in
 whichever order the previous twelve have made most urgent.
+
+Two roadmaps run beside the order rather than in it. [V0](releases.md)
+is a day and should happen before row 1, since the repository currently
+describes a `0.1.0` that was never tagged; V1 puts a release train under
+the first sprint that lands. [W0](website.md) is a week that can happen
+any time after that — the `--screenshot` flag means the site can carry a
+real frame today — and W4, the launch, is gated on the 0.5 release.
 
 ## Non-goals
 

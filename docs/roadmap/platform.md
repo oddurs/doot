@@ -74,12 +74,9 @@ Settings visit, no dialog.
 - **A DMG** with a drag-to-Applications background, from the release
   workflow.
 - **A Homebrew cask.** The name question from P0 settles here.
-- **Release notes** assembled from merged PR titles since the last tag,
-  with the sprint records linked when a release closes one; a
-  `CHANGELOG.md` that is the same text kept in the tree.
-- **Versioning.** `0.x` while any roadmap on this directory has an open
-  sprint labelled "next"; `1.0` is a decision, not a milestone that
-  arrives.
+- **Release notes and versioning** are [releases.md](releases.md)'s:
+  the changelog section is the release body (V3), and what a minor or
+  patch means, and what 1.0 requires, is written there (V2).
 
 *Done when:* `brew install --cask <name>` produces the same app as the
 DMG, and the release page carries notes a user can read.
