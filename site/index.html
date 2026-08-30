@@ -42,7 +42,13 @@
   <section>
     <h2>What it is for</h2>
     <p>The person at the keyboard is increasingly watching several agents at once, each for minutes to hours, each occasionally needing a human. doot is built for that: which session needs you, what it needs, and the record of everything it did while you were elsewhere.</p>
-    <p>Every claim in the repository carries a number or a picture. The parser drains plain text at 490 MiB/s; the frame is one draw call; an idle window wakes up zero times a second. The numbers on this page will be drawn from the same file the benchmark writes.</p>
+    <p>Every claim in the repository carries a number or a picture. The frame is one draw call; an idle window wakes up zero times a second; and the parser's throughput is below, drawn from the file the benchmark writes rather than typed here.</p>
+  </section>
+
+  <section id="numbers">
+    <h2>The numbers</h2>
+    <p>Bytes from a PTY through the parser into the grid — the whole stack below the renderer, on six recorded corpora and two recorded agent sessions. <code>zig build bench</code> writes <code>bench/baseline.txt</code>; this page reads it.</p>
+    <!-- numbers -->
   </section>
 
   <section>
@@ -50,6 +56,7 @@
     <ul class="links">
       <li><a href="log/">The engineering log</a> — one record per sprint: what was proposed, what was measured, what it retired</li>
       <li><a href="docs/roadmap/">Roadmaps</a> — one per priority, each with the thing that decides whether a sprint is done</li>
+      <li><a href="rendering/">How it renders</a> — the gallery's reference captures, at 1× and 2×</li>
       <li><a href="docs/">Docs</a> — benchmarking, the gallery, the security policy</li>
       <li><a href="contributing/">Contributing</a> — the build, the test layers, what a reviewable change looks like</li>
       <li><a href="https://github.com/oddurs/doot#readme">README</a> · <a href="https://github.com/oddurs/doot/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/oddurs/doot">Source</a>, MIT</li>

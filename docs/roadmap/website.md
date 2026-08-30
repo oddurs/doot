@@ -29,7 +29,7 @@ cannot drift.
 | Screenshots | The gallery's references, and the front page's frame, rendered by the binary from a scene | `bench/gallery/`, `site/render.sh` |
 | Pitch | The README's first paragraph and the repository description | `README.md` |
 | Docs | Rendered at `/docs/…` by `site/build.py`, with the sprint records as `/log/` (W1) | `site/build.py` |
-| Numbers | `bench/baseline.txt`, `--frame-stats` output in sprint records | `bench/`, `docs/roadmap/completed/` |
+| Numbers | The bench table and a per-tag history chart on the front page, drawn from `bench/baseline.txt` and each tag's copy at build time (W2) | `site/build.py` |
 | Changelog | `CHANGELOG.md`, Keep-a-Changelog form | — |
 | Name | `doot`, since [the rename](completed/sprint-n-rename-doot.md): four letters, no Homebrew or GitHub collision, `doot.sh` free at the time | — |
 | Domain | None | — |
@@ -116,7 +116,7 @@ before it was written — every construct in every Markdown file counted —
 and 40 pages render with zero unsupported constructs, zero broken
 links and zero dead anchors. See [the record](completed/sprint-w1-docs.md).
 
-### W2 — Numbers that are live (one week)
+### W2 — Numbers that are live — **done**
 
 - **The bench table** on the front page, rendered from
   `bench/baseline.txt` at build time — corpus, MiB/s, what it is. When
@@ -138,6 +138,14 @@ release, so there is a history to draw.
 the repository at the deployed commit, checked by a test in the build.
 
 *Risk:* low.
+
+*Result:* done, without the history directory: each tag already carries
+its baseline, so the chart is drawn from `git show <tag>:bench/baseline.txt`
+per tag plus `main`, and no second copy of a number exists. The front
+page is a template with one slot the build fills; the sentence that typed
+a number in W0 is gone. `/rendering/` shows four gallery references,
+byte-identical. The `otool -L` badge waits for D5. See
+[the record](completed/sprint-w2-numbers.md).
 
 ### W3 — Releases on the site (half a week)
 

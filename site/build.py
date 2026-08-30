@@ -317,6 +317,97 @@ def render(doc):
     return "\n".join(body)
 
 
+# ---- numbers ---------------------------------------------------------------
+#
+# W2: the bench table and its history are drawn from bench/baseline.txt --
+# the current file, and each tagged release's copy via `git show`. No
+# second copy of any number exists on the site.
+
+def parse_baseline(text):
+    """The parse table of bench/baseline.txt: {corpus: (mibs, what)}."""
+    rows = {}
+    in_parse = False
+    for line in text.splitlines():
+        if line.startswith("parse:"): in_parse = True; continue
+        if in_parse and line.startswith(("scroll:", "scan:")): break
+        m = re.match(r"^\s{2}([a-z0-9-]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+(\d+)\s+(.*)$", line)
+        if in_parse and m:
+            rows[m.group(1)] = (float(m.group(2)), m.group(6).strip())
+    return rows
+
+def history(repo):
+    tags = subprocess.run(["git","tag","-l","v*","--sort=version:refname"], cwd=repo, capture_output=True, text=True).stdout.split()
+    points = []
+    for t in tags:
+        txt = subprocess.run(["git","show",f"{t}:bench/baseline.txt"], cwd=repo, capture_output=True, text=True).stdout
+        if txt: points.append((t, parse_baseline(txt)))
+    head = open(repo+"/bench/baseline.txt").read()
+    points.append(("main", parse_baseline(head)))
+    return points
+
+def bench_svg(points, width=640, height=220):
+    corpora = [c for c in points[-1][1]]
+    colours = ["#7fd6c1","#61afef","#e5c07b","#c678dd","#8fbf7f","#e06c75","#56b6c2"]
+    top = max(v[0] for _, rows in points for v in rows.values()) * 1.1
+    pad_l, pad_r, pad_t, pad_b = 48, 150, 14, 30
+    W = width - pad_l - pad_r; H = height - pad_t - pad_b
+    n = len(points)
+    def x(i): return pad_l + (W * i / max(n-1, 1))
+    def y(v): return pad_t + H - H * v / top
+    out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img" aria-label="Parse throughput per corpus, by release" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="11">']
+    for g in range(0, 5):
+        v = top * g / 4; yy = y(v)
+        out.append(f'<line x1="{pad_l}" y1="{yy:.1f}" x2="{pad_l+W}" y2="{yy:.1f}" stroke="currentColor" stroke-opacity="0.15"/>')
+        out.append(f'<text x="{pad_l-6}" y="{yy+4:.1f}" text-anchor="end" fill="currentColor" fill-opacity="0.6">{v:.0f}</text>')
+    for i, (label, _) in enumerate(points):
+        out.append(f'<text x="{x(i):.1f}" y="{height-10}" text-anchor="middle" fill="currentColor" fill-opacity="0.6">{label}</text>')
+    labels = []
+    for k, c in enumerate(corpora):
+        col = colours[k % len(colours)]
+        pts = [(x(i), y(rows[c][0])) for i, (_, rows) in enumerate(points) if c in rows]
+        d = " ".join(f"{px:.1f},{py:.1f}" for px, py in pts)
+        out.append(f'<polyline fill="none" stroke="{col}" stroke-width="2" points="{d}"/>')
+        for px, py in pts: out.append(f'<circle cx="{px:.1f}" cy="{py:.1f}" r="3" fill="{col}"/>')
+        labels.append([pts[-1][1], col, f"{c} {points[-1][1][c][0]:.0f}"])
+    # Labels are placed at their line's end, then pushed apart so that no
+    # two are closer than a line of text, walking down from the top.
+    labels.sort(key=lambda l: l[0])
+    gap = 13
+    for i in range(1, len(labels)):
+        if labels[i][0] - labels[i-1][0] < gap:
+            labels[i][0] = labels[i-1][0] + gap
+    overflow = labels[-1][0] - (pad_t + H)
+    if overflow > 0:
+        for l in labels: l[0] -= overflow
+    lx = x(n - 1) + 8
+    for ly, col, text in labels:
+        out.append(f'<text x="{lx:.1f}" y="{ly+4:.1f}" fill="{col}">{text}</text>')
+    out.append("</svg>")
+    return "\n".join(out)
+
+
+def bench_table(rows):
+    out = ['<table class="bench"><thead><tr><th>corpus</th><th>MiB/s</th><th>what it is</th></tr></thead><tbody>']
+    for name, (mibs, what) in sorted(rows.items(), key=lambda kv: -kv[1][0]):
+        out.append("<tr><td><code>%s</code></td><td>%.1f</td><td>%s</td></tr>" % (html.escape(name), mibs, html.escape(what)))
+    out.append("</tbody></table>")
+    return "".join(out)
+
+
+def numbers_html():
+    points = history(str(REPO))
+    rows = points[-1][1]
+    head = (REPO / "bench/baseline.txt").read_text(encoding="utf-8").splitlines()
+    machine = next((l.strip() for l in head if "zig " in l), "")
+    figure = (
+        '<figure class="chart">%s<figcaption>Parse throughput per corpus, MiB/s, at each tagged release and on <code>main</code>. '
+        'Drawn from <code>bench/baseline.txt</code> at build time; a number that goes down is drawn going down.</figcaption></figure>'
+        % bench_svg(points)
+    )
+    note = '<p class="fine">%s — best of nine repetitions on a quiet machine. The shared CI runner posts its own numbers on every PR and they are labelled as indicative.</p>' % html.escape(machine)
+    return bench_table(rows) + figure + note
+
+
 # ---- pages ----------------------------------------------------------------
 
 def describe(body):
@@ -360,6 +451,30 @@ def page(title, body, url, subtitle=None):
 </body>
 </html>
 """ % (html.escape(title), html.escape(describe(body), quote=True), BASE, nav, body, sub, GITHUB)
+
+
+GALLERY = (
+    "typography-14pt-1x.png", "typography-14pt-2x.png",
+    "attributes-14pt-2x.png", "colors-14pt-2x.png",
+)
+
+
+def rendering_html():
+    def fig(name, caption):
+        return '<figure><img src="%s/gallery/%s" alt="%s" loading="lazy"><figcaption>%s</figcaption></figure>' % (
+            BASE, name, html.escape(caption), html.escape(caption))
+    return "".join([
+        '<h1 id="rendering">How it renders</h1>',
+        "<p>These are the gallery's reference captures &mdash; the images <code>zig build gallery</code> diffs every change against, "
+        "rendered by the terminal itself, headless, and committed. What you see here is what the pixels are. "
+        "The ranges the system face lacks &mdash; braille, CJK, emoji &mdash; still render as nothing; that is X2 on the "
+        "experience roadmap, and the typography page is where it will show up first.</p>",
+        fig("typography-14pt-1x.png", "The typography page at 14 pt, 1×: printable ASCII, box drawing, blocks, braille, CJK, combining marks."),
+        fig("typography-14pt-2x.png", "The same page at 2×, which is what a Retina display shows."),
+        fig("attributes-14pt-2x.png", "Every SGR attribute the parser accepts, at 2×."),
+        fig("colors-14pt-2x.png", "The sixteen ANSI colours and the 256-colour cube, at 2×."),
+        '<p>How the gallery works, and how to add a scene: <a href="%s/docs/gallery/">docs/gallery</a>.</p>' % BASE,
+    ])
 
 
 def added_dates(directory):
@@ -413,8 +528,20 @@ def build(check=False):
         for p in sorted(OUT.rglob("*"), reverse=True):
             p.unlink() if p.is_file() else p.rmdir()
     OUT.mkdir(parents=True, exist_ok=True)
-    for name in ("index.html", "site.css", "hero.png"):
+    for name in ("site.css", "hero.png"):
         (OUT / name).write_bytes((SITE / name).read_bytes())
+    index = (SITE / "index.html").read_text(encoding="utf-8")
+    if "<!-- numbers -->" not in index:
+        raise SystemExit("site/index.html has lost its <!-- numbers --> slot")
+    (OUT / "index.html").write_text(index.replace("<!-- numbers -->", numbers_html()), encoding="utf-8")
+    # The gallery's references, so a visitor can judge the rendering
+    # before installing: the typography page at 1x and 2x, and the
+    # attribute and colour sheets. Copied, never re-encoded.
+    (OUT / "gallery").mkdir(exist_ok=True)
+    for name in GALLERY:
+        (OUT / "gallery" / name).write_bytes((REPO / "bench/gallery/expected" / name).read_bytes())
+    (OUT / "rendering").mkdir(exist_ok=True)
+    (OUT / "rendering" / "index.html").write_text(page("How it renders", rendering_html(), "/rendering"), encoding="utf-8")
     for rel, (d, body) in docs.items():
         dest = OUT / d.url.lstrip("/") / "index.html"
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -448,7 +575,7 @@ def build(check=False):
     (OUT / "log" / "index.html").write_text(page("The engineering log", log_body, "/log"), encoding="utf-8")
 
     n_pages = len(docs) + 2
-    print("wrote %d pages to %s" % (n_pages, OUT.relative_to(REPO)))
+    print("wrote %d pages to %s" % (n_pages + 1, OUT.relative_to(REPO)))
     if problems:
         print("\n".join(problems), file=sys.stderr)
         if check:
