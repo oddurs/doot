@@ -1,16 +1,23 @@
 name: Pages
 
-# The site: docs/roadmap/website.md. Two hand-written files and one image
-# the terminal rendered of itself, deployed straight from site/ -- no
-# build step until W1 adds the generator. Anything on the page that the
-# repository does not produce is a bug, and the check below holds the
-# two promises a reviewer cannot see in a diff.
+# The site: docs/roadmap/website.md. site/build.py renders docs/ and the
+# engineering log through a Markdown subset that refuses what it does
+# not know, checks every link, and writes site/out/. Anything on the page
+# that the repository does not produce is a bug, and the check below
+# holds the two promises a reviewer cannot see in a diff.
 
 on:
   push:
     branches: [main]
     paths:
       - 'site/**'
+      - 'docs/**'
+      - 'CONTRIBUTING.md'
+      # Pages link to these, so a rename must redeploy or the link checker
+      # will fail on a later, unrelated push.
+      - 'README.md'
+      - 'SECURITY.md'
+      - 'CLAUDE.md'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -36,23 +43,31 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The engineering log dates each record from git.
+          fetch-depth: 0
+
+      - name: Build the site
+        # Standard-library Python, like bench/gen_corpus.py. --check makes
+        # a broken link or an unknown Markdown construct fail the deploy.
+        run: python3 site/build.py --check
 
       - name: Check the page keeps its promises
-        # No script tag, ever; and the page with its one image stays under
-        # 300 KB, which is the budget W0 set so it loads on anything.
+        # No script tag, ever; and the front page with its one image stays
+        # under 300 KB, which is the budget W0 set so it loads on anything.
         run: |
-          if grep -qi '<script' site/index.html; then
-            echo "site/index.html has a script tag" >&2; exit 1
+          if grep -rqi '<script' site/out --include='*.html'; then
+            echo "a rendered page has a script tag" >&2; exit 1
           fi
-          total=$(cat site/index.html site/site.css site/hero.png | wc -c)
-          echo "the page is $total bytes"
+          total=$(cat site/out/index.html site/out/site.css site/out/hero.png | wc -c)
+          echo "the front page is $total bytes"
           [ "$total" -lt 307200 ]
 
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
 
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:
-          path: site
+          path: site/out
 
       - id: deploy
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

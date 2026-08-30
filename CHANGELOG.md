@@ -132,6 +132,10 @@ All notable changes to this project are documented here. The format follows
 - **A website.** [oddurs.github.io/doot](https://oddurs.github.io/doot/):
   one page, two hand-written files, no script, and a frame the terminal
   rendered of itself. Deployed from `site/` by Actions.
+- **The docs and the engineering log, on the site.** `site/build.py`
+  renders `docs/` and `CONTRIBUTING.md` through a Markdown subset that
+  refuses what it does not know and checks every link; the completed
+  sprint records are `/log/`, newest first.
 
 ## [0.1.0] — 2026-08-28
 
