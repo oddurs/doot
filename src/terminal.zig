@@ -463,11 +463,17 @@ pub const Terminal = struct {
         // the arms that know their private forms see them (#28); the rest
         // are ignored until A2 implements them. See docs/security.md.
         if (csi.private != 0) {
-            switch (csi.final) {
+            if (csi.private == '?') switch (csi.final) {
                 'h' => self.setMode(csi, true),
                 'l' => self.setMode(csi, false),
+                // DECSED and DECSEL erase only unprotected cells, and with
+                // DECSCA unimplemented every cell is unprotected -- so they
+                // are ED and EL (VT520 manual, 5-62 and 5-64).
+                'J' => self.eraseDisplay(csi.raw(0, 0)),
+                'K' => self.eraseLine(csi.raw(0, 0)),
+                'n' => self.extendedStatusReport(csi),
                 else => {},
-            }
+            };
             return;
         }
         switch (csi.final) {
@@ -887,6 +893,20 @@ pub const Terminal = struct {
             },
             else => {},
         }
+    }
+
+    /// DECXCPR (`CSI ? 6 n`): the cursor position, in the form that says it
+    /// was asked for with the private marker -- `CSI ? r ; c R` (xterm
+    /// ctlseqs). The plain CPR shape would be the wrong answer to this
+    /// question, which is what the terminal used to give.
+    fn extendedStatusReport(self: *Terminal, csi: vt.Csi) void {
+        if (csi.raw(0, 0) != 6) return;
+        var buf: [32]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "\x1b[?{d};{d}R", .{
+            self.cursor.y + 1,
+            self.cursor.x + 1,
+        }) catch return;
+        self.reply(s);
     }
 
     fn deviceAttributes(self: *Terminal, csi: vt.Csi) void {
@@ -1536,16 +1556,25 @@ test "a private-marker CSI is not the unprefixed sequence (#28)" {
     try testing.expectEqual(@as(usize, 2), t.cursor.x);
     try testing.expectEqual(@as(usize, 2), t.cursor.y);
     try testing.expectEqualStrings("", t.replies.items);
-    // The private forms that are implemented still work.
+    // The private forms that are implemented still work: DEC modes, and
+    // DECSED / DECSEL / DECXCPR, which the old dispatch got right by
+    // accident and this one does on purpose.
     feed(&t, "\x1b[?25l");
     try testing.expect(!t.modes.cursor_visible);
+    feed(&t, "\x1b[1;1Hxyz\x1b[?2J");
+    try testing.expectEqual(@as(u21, ' '), t.screen().at(0, 0).cp);
+    feed(&t, "\x1b[3;3H\x1b[?6n");
+    try testing.expectEqualStrings("\x1b[?3;3R", t.replies.items);
 }
 
 test "a CSI with intermediates is ignored rather than dispatched on its final" {
     var t = try mkTerm(10, 6);
     defer t.deinit();
     // DECCARA (ctlseqs: CSI Pt ; Pl ; Pb ; Pr ; Ps $ r) is not DECSTBM.
-    feed(&t, "\x1b[2;1;3;5;1$r");
+    // Read as DECSTBM these parameters are a valid region, rows 2..4, so
+    // the old dispatch set one; a rectangle whose top >= bottom would be
+    // rejected by DECSTBM too and prove nothing.
+    feed(&t, "\x1b[2;4;3;5;1$r");
     try testing.expectEqual(@as(usize, 0), t.scroll_top);
     try testing.expectEqual(@as(usize, 5), t.scroll_bot);
     // DECSCUSR (CSI Ps SP q) leaves the cursor where it was.
@@ -1586,7 +1615,7 @@ test "the replies that are allowed carry nothing from the screen" {
     var t = try mkTerm(20, 4);
     defer t.deinit();
     feed(&t, "SECRET\x1b[2;3H");
-    feed(&t, "\x1b[c\x1b[5n\x1b[6n");
-    try testing.expectEqualStrings("\x1b[?62;1;6;22c\x1b[0n\x1b[2;3R", t.replies.items);
+    feed(&t, "\x1b[c\x1b[5n\x1b[6n\x1b[?6n");
+    try testing.expectEqualStrings("\x1b[?62;1;6;22c\x1b[0n\x1b[2;3R\x1b[?2;3R", t.replies.items);
     try testing.expect(std.mem.indexOf(u8, t.replies.items, "SECRET") == null);
 }

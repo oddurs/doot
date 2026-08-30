@@ -39,8 +39,20 @@ scroll region from a rectangle.
 
 The fix is a guard at the top of `csiDispatch`: a CSI with intermediates
 is ignored outright; a CSI with a private marker reaches only the arms
-that know their private forms (`h` and `l`, for the DEC modes) and is
-otherwise ignored until A2 implements it.
+that know their private forms and is otherwise ignored until A2
+implements it.
+
+Review found what the first draft of the guard broke: three private
+forms had been *right by accident*. `CSI ? 2 J` (DECSED) and `CSI ? K`
+(DECSEL) erase only unprotected cells, and with DECSCA unimplemented
+every cell is unprotected — so falling through to ED and EL was the
+correct behaviour, and ignoring them was a regression. `CSI ? 6 n`
+(DECXCPR) had been answered with a plain CPR, which is the wrong shape;
+it now replies `CSI ? r ; c R`. All three are implemented on purpose,
+with the spec cited, and the #28 test asserts them. Review also caught
+the first DECCARA test proving nothing — its parameters read as DECSTBM
+made `top >= bot`, which DECSTBM rejects anyway — so the test now uses a
+rectangle that the old dispatch turned into a real scroll region.
 
 ## Result
 

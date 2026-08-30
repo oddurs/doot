@@ -98,7 +98,7 @@ measured version.
 | Mouse reporting (1000/1002/1003/1006) | Mode tracked as one bool; events never forwarded | `Modes.mouse`; `main.zig` `handleWheel` only |
 | Synchronized output (DEC 2026) | Not handled. A frame can be snapshotted between a TUI's erase and its redraw | `Renderer.snapshot` runs whenever `dirty` |
 | Focus events (1004) | Not handled; `renderer.focused` is tracked for the cursor only | `main.zig` |
-| kitty keyboard protocol (`CSI > u`, `CSI = u`, `CSI ? u`) | **Mis-handled**: `'u'` restores the cursor regardless of the private marker, so a push of keyboard flags moves the cursor | `csiDispatch`, `'u'` arm |
+| kitty keyboard protocol (`CSI > u`, `CSI = u`, `CSI ? u`) | Ignored, correctly, since [S0](security.md) — before it, `'u'` restored the cursor regardless of the private marker ([#28](https://github.com/oddurs/doot/issues/28)) | `csiDispatch`, the private-marker guard |
 | DECSCUSR (cursor shape) | Ignored, by design, with a comment saying so | `csiDispatch` intermediates note |
 | OSC 0 / 2 (title) | Handled | `oscDispatch` |
 | OSC 7 (cwd), 8 (links), 9 / 99 / 777 (notify), 10 / 11 / 12 (colour query), 52 (clipboard), 133 (semantic prompts) | Parsed to a string, then dropped | `oscDispatch` `else => {}` |

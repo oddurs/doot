@@ -57,7 +57,7 @@ unless it says otherwise.
 
 | Sequence | Direction | Policy | Status | Test |
 |---|---|---|---|---|
-| DA1 (`CSI c`), DSR 5, DSR 6 (`CSI 6 n`) | reply | Allowed: capabilities, a health check, the cursor position. | answered | `the replies that are allowed carry nothing from the screen` |
+| DA1 (`CSI c`), DSR 5, DSR 6 (`CSI 6 n`), DECXCPR (`CSI ? 6 n`) | reply | Allowed: capabilities, a health check, the cursor position. | answered | `the replies that are allowed carry nothing from the screen` |
 | DA2, XTVERSION, DECRQM, XTWINOPS 14 / 16 / 18 | reply | Allowed when implemented: identity, modes, geometry. | ignored, no reply ([A2](roadmap/agentic.md), [C1](roadmap/correctness.md)) | — |
 | XTWINOPS 21 (report title), 20 (report icon) | reply | **Never.** The title is child-controlled; reporting it is an injection channel. | ignored | `the title is never reported back to the child` |
 | DECRQCRA (checksum of a screen rectangle) | reply | **Never.** It reads the screen. | ignored | `screen-reading queries are never answered` |
@@ -80,8 +80,8 @@ way round. When one lands, its status changes and its test is named.
 
 ## What "allowed" replies may contain
 
-The DA1 string is a constant. DSR 5 is a constant. CPR is two integers
-that the program set itself. Nothing else is sent to the child unasked,
+The DA1 string is a constant. DSR 5 is a constant. CPR and DECXCPR are
+two integers that the program set itself. Nothing else is sent to the child unasked,
 and nothing that is sent is derived from cell contents, the title, the
 clipboard, or any other tab. The test for that row prints a marker on
 the screen, asks all three questions, and asserts the marker is absent

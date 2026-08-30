@@ -147,9 +147,9 @@ const known_csi = [_]Known{
         .note = "no reply",
     },
     .{ .private = '>', .final = 'c', .status = .ignored, .what = "secondary DA", .note = "no reply" },
-    .{ .private = '?', .final = 'n', .status = .ignored, .what = "DEC status report", .note = "no reply" },
-    .{ .private = '?', .final = 'J', .status = .ignored, .what = "DECSED selective erase" },
-    .{ .private = '?', .final = 'K', .status = .ignored, .what = "DECSEL selective erase" },
+    .{ .private = '?', .final = 'n', .status = .handled, .what = "DECXCPR cursor report", .note = "replies `CSI ? r ; c R`" },
+    .{ .private = '?', .final = 'J', .status = .handled, .what = "DECSED selective erase", .note = "ED: nothing is protected without DECSCA" },
+    .{ .private = '?', .final = 'K', .status = .handled, .what = "DECSEL selective erase", .note = "EL, likewise" },
     .{ .private = '>', .final = 'K', .status = .ignored, .what = "xterm key resource" },
 
     // Intermediate-bearing forms. `csiDispatch` reads neither the private
