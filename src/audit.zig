@@ -46,9 +46,9 @@ const Status = enum {
 const Known = struct {
     /// The private-marker byte, 0 for none.
     private: u8 = 0,
-    /// The first intermediate byte, 0 for none. `CSI SP @` is SL, not ICH;
-    /// `terminal.zig` reads neither this nor the private marker, so a
-    /// sequence carrying one lands on the arm for the plain final byte.
+    /// The first intermediate byte, 0 for none. `CSI SP @` is SL, not ICH.
+    /// `csiDispatch` ignores any sequence carrying one (S0), so a row here
+    /// says what the sequence means, not what happens to it.
     intermediate: u8 = 0,
     final: u8,
     status: Status,
@@ -93,43 +93,44 @@ const known_csi = [_]Known{
     .{ .private = '?', .final = 'h', .status = .handled, .what = "DEC set mode" },
     .{ .private = '?', .final = 'l', .status = .handled, .what = "DEC reset mode" },
 
-    // The private-marker rows. `csiDispatch` switches on the final byte
-    // without looking at `csi.private`, so these reach the arm for the
-    // unprefixed sequence and do something entirely unrelated.
+    // The private-marker rows. `csiDispatch` used to switch on the final
+    // byte without looking at `csi.private`, so these reached the arm for
+    // the unprefixed sequence and did something unrelated (#28). S0 made
+    // it ignore any private form it does not implement; A2 implements them.
     .{
         .private = '>',
         .final = 'm',
-        .status = .mishandled,
+        .status = .ignored,
         .what = "xterm modifyOtherKeys",
-        .note = "runs SGR: `CSI >4m` turns on underline",
+        .note = "ignored until it is implemented; was mis-handled, see #28",
     },
     .{
         .private = '<',
         .final = 'u',
-        .status = .mishandled,
+        .status = .ignored,
         .what = "kitty keyboard pop",
-        .note = "runs restore-cursor: the cursor teleports",
+        .note = "ignored until it is implemented; was mis-handled, see #28",
     },
     .{
         .private = '>',
         .final = 'u',
-        .status = .mishandled,
+        .status = .ignored,
         .what = "kitty keyboard push",
-        .note = "runs restore-cursor: the cursor teleports",
+        .note = "ignored until it is implemented; was mis-handled, see #28",
     },
     .{
         .private = '=',
         .final = 'u',
-        .status = .mishandled,
+        .status = .ignored,
         .what = "kitty keyboard set",
-        .note = "runs restore-cursor: the cursor teleports",
+        .note = "ignored until it is implemented; was mis-handled, see #28",
     },
     .{
         .private = '?',
         .final = 'u',
-        .status = .mishandled,
+        .status = .ignored,
         .what = "kitty keyboard query",
-        .note = "runs restore-cursor, and answers nothing",
+        .note = "ignored until it is implemented; was mis-handled, see #28",
     },
     .{
         .private = '>',
@@ -146,9 +147,9 @@ const known_csi = [_]Known{
         .note = "no reply",
     },
     .{ .private = '>', .final = 'c', .status = .ignored, .what = "secondary DA", .note = "no reply" },
-    .{ .private = '?', .final = 'n', .status = .ignored, .what = "DEC status report", .note = "no reply" },
-    .{ .private = '?', .final = 'J', .status = .ignored, .what = "DECSED selective erase" },
-    .{ .private = '?', .final = 'K', .status = .ignored, .what = "DECSEL selective erase" },
+    .{ .private = '?', .final = 'n', .status = .handled, .what = "DECXCPR cursor report", .note = "replies `CSI ? r ; c R`" },
+    .{ .private = '?', .final = 'J', .status = .handled, .what = "DECSED selective erase", .note = "ED: nothing is protected without DECSCA" },
+    .{ .private = '?', .final = 'K', .status = .handled, .what = "DECSEL selective erase", .note = "EL, likewise" },
     .{ .private = '>', .final = 'K', .status = .ignored, .what = "xterm key resource" },
 
     // Intermediate-bearing forms. `csiDispatch` reads neither the private
@@ -156,16 +157,16 @@ const known_csi = [_]Known{
     .{
         .intermediate = ' ',
         .final = '@',
-        .status = .mishandled,
+        .status = .ignored,
         .what = "SL scroll left",
-        .note = "runs ICH: inserts blanks instead of scrolling",
+        .note = "ignored until it is implemented; was mis-handled, see #28",
     },
     .{
         .intermediate = ' ',
         .final = 'A',
-        .status = .mishandled,
+        .status = .ignored,
         .what = "SR scroll right",
-        .note = "runs CUU: moves the cursor instead of scrolling",
+        .note = "ignored until it is implemented; was mis-handled, see #28",
     },
     .{
         .intermediate = ' ',

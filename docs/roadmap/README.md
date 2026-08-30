@@ -54,6 +54,7 @@ about the plan. The two retired ones are the most useful of the seven.
 
 | Record | Outcome |
 |---|---|
+| [Sprint S0 — the reply policy](completed/sprint-s0-reply-policy.md) | The rule, a test per row, and #28 closed on the way: two mis-handled sequences became none. |
 | [Sprint N — rename to doot](completed/sprint-n-rename-doot.md) | The name collided with a GNOME terminal. Chosen against Homebrew, GitHub and domains; the bell won. |
 | [Sprint V0 — make 0.1.0 true](completed/sprint-v0-make-010-true.md) | Tagging ran a CI path that had never executed. Two bugs fell out. |
 | [Sprint 0 — benchmarks](completed/sprint-0-benchmarks.md) | Built the harness. Immediately falsified the plan that commissioned it. |

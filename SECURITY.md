@@ -31,6 +31,17 @@ reporting privately:
 - Denial of service that a short byte sequence triggers — an unbounded
   allocation or a hang from a crafted sequence.
 
+## What the terminal will never send back
+
+Programs can ask a terminal questions, and some of the answers would be a
+way to read the screen, the title or the clipboard — and, by asking for
+the title after setting it to a command, a way to type. doot's rule, held
+by a test per row in [docs/security.md](docs/security.md): **it never
+sends the child bytes derived from screen content, the title, the
+clipboard, or another tab.** A reply carries only what the child could
+already know — modes, capabilities, the cursor position. A reply that
+breaks that rule is a vulnerability; report it privately.
+
 ## Session recording
 
 doot records every session's **output** to disk by default, and says so

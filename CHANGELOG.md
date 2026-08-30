@@ -15,6 +15,15 @@ All notable changes to this project are documented here. The format follows
   redirects the old repository name. See
   [the record](docs/roadmap/completed/sprint-n-rename-doot.md).
 
+### Security
+
+- **The reply policy.** The terminal never sends the child bytes derived
+  from screen content, the title, the clipboard, or another tab. Written
+  down in [docs/security.md](docs/security.md) with a test per row: title
+  reports, screen checksums, DECRQSS, XTGETTCAP and OSC 52 reads are never
+  answered; DA1, DSR and CPR are the only replies, and they are constants
+  or cursor coordinates.
+
 ### Added
 
 - **Selection and copy.** Drag to select, double-click for a word,
@@ -59,6 +68,12 @@ All notable changes to this project are documented here. The format follows
   and the worst single flush.
 
 ### Fixed
+
+- **A CSI with a private marker or intermediates is no longer dispatched
+  as the unprefixed sequence.** `CSI > 4 m` (modifyOtherKeys) used to turn
+  underline on, and `CSI < u` (kitty keyboard pop) used to move the cursor
+  to the saved position; both fired four times per recorded agent session.
+  `CSI $ r` (DECCARA) would have set a scroll region. (#28)
 
 - **`ESC[?1006h` no longer disables selection.** 1006 and 1015 are mouse
   *encodings*, not tracking modes, and folding them into one `mouse` bool with

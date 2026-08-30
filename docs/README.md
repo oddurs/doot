@@ -5,6 +5,7 @@
 | [roadmap/](roadmap/) | What is planned, what shipped, and what measurement killed. |
 | [benchmarking.md](benchmarking.md) | How `zig build bench` works and how to add a corpus. |
 | [gallery.md](gallery.md) | How `zig build gallery` works and how to add a scene. |
+| [security.md](security.md) | The threat model and the reply policy: what the terminal will never send the child, with a test per row. |
 
 For building, testing and sending a patch, see
 [CONTRIBUTING.md](../CONTRIBUTING.md). For what the terminal does and does not
