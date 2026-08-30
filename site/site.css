@@ -159,3 +159,13 @@ body.doc a:hover { color: var(--fg); }
 .log li::before { content: none; }
 .log .when { color: var(--dim); font-size: 0.85rem; margin-right: 0.6em; }
 .log p { margin: 0.25rem 0 0; color: var(--dim); }
+
+/* ---- the numbers: bench table and chart, drawn by build.py ----------- */
+
+table.bench td:nth-child(2) { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; padding-right: 1.4em; }
+table.bench td:first-child, table.bench th:first-child { width: auto; padding-right: 1.2em; white-space: nowrap; }
+.chart { margin: 1.4rem 0 0.4rem; }
+.chart svg { display: block; width: 100%; height: auto; color: var(--fg); }
+.chart figcaption, body.doc figcaption { color: var(--dim); font-size: 0.85rem; margin-top: 0.5rem; max-width: 60ch; }
+body.doc figure { margin: 1.4rem 0; }
+body.doc figure img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; }

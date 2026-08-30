@@ -136,6 +136,9 @@ All notable changes to this project are documented here. The format follows
   renders `docs/` and `CONTRIBUTING.md` through a Markdown subset that
   refuses what it does not know and checks every link; the completed
   sprint records are `/log/`, newest first.
+- **Live numbers on the site.** The bench table and a per-release chart
+  on the front page are drawn from `bench/baseline.txt` and each tag's
+  copy of it at build time; `/rendering/` shows the gallery's references.
 
 ## [0.1.0] — 2026-08-28
 
