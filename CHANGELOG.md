@@ -129,6 +129,10 @@ All notable changes to this project are documented here. The format follows
 - A `colors-14pt-2x` gallery capture, so 2× has the same
   geometry/projection/clear/channel-order oracle 1× has.
 
+- **A website.** [oddurs.github.io/doot](https://oddurs.github.io/doot/):
+  one page, two hand-written files, no script, and a frame the terminal
+  rendered of itself. Deployed from `site/` by Actions.
+
 ## [0.1.0] — 2026-08-28
 
 First tagged release. A working terminal emulator for macOS: VT parser, cell

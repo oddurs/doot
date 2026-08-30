@@ -1,0 +1,126 @@
+/* doot's front page. The palette is the terminal's own theme (src/theme.zig)
+   for dark, and a light scheme derived from it. The type is the system
+   monospace, which is what the terminal uses too. No web font, no script. */
+
+:root {
+  --bg: #10141a;
+  --fg: #c8d0d8;
+  --dim: #8a94a2;
+  --line: #2c3a4a;
+  --accent: #7fd6c1;
+  --accent-ink: #10141a;
+  --warm: #e5c07b;
+  --link: #79c0ff;
+  color-scheme: dark light;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f7f8fa;
+    --fg: #1c2028;
+    --dim: #5c6675;
+    --line: #d9dee6;
+    --accent: #0f8f78;
+    --accent-ink: #f7f8fa;
+    --warm: #9a6b00;
+    --link: #0b63c4;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { background: var(--bg); }
+body {
+  margin: 0;
+  color: var(--fg);
+  background: var(--bg);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+.hero {
+  padding: clamp(16px, 4vw, 48px) clamp(12px, 4vw, 48px) 0;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.hero img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+main, footer {
+  max-width: 72ch;
+  margin: 0 auto;
+  padding: 0 clamp(12px, 4vw, 24px);
+}
+
+h1 {
+  font-size: clamp(2.4rem, 8vw, 4rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: clamp(24px, 5vw, 48px) 0 8px;
+  line-height: 1;
+}
+h1::after {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 0.9em;
+  margin-left: 0.12em;
+  vertical-align: -0.08em;
+  background: var(--accent);
+  border-radius: 2px;
+}
+h2 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 2.4rem 0 0.6rem;
+  color: var(--accent);
+}
+h2::before { content: "# "; color: var(--dim); font-weight: 400; }
+
+.lede { font-size: 1.05rem; margin: 0 0 0.6rem; }
+.tag  { color: var(--dim); margin: 0 0 1.6rem; }
+
+.cta { margin: 0 0 1rem; }
+.button {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--accent-ink);
+  text-decoration: none;
+  font-weight: 700;
+  padding: 0.7em 1.1em;
+  border-radius: 8px;
+}
+.button:hover, .button:focus-visible { filter: brightness(1.08); outline: 2px solid var(--fg); outline-offset: 2px; }
+.fine { display: block; color: var(--dim); font-size: 0.9rem; margin-top: 0.7rem; max-width: 60ch; }
+
+p { margin: 0 0 0.9rem; }
+a { color: var(--link); text-underline-offset: 0.15em; }
+code { font-family: inherit; color: var(--warm); }
+
+table { border-collapse: collapse; width: 100%; margin: 0.6rem 0 0; font-size: 0.95rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.55em 0.7em 0.55em 0; border-top: 1px solid var(--line); }
+th { color: var(--dim); font-weight: 400; border-top: 0; padding-top: 0; }
+td:first-child, th:first-child { width: 55%; padding-right: 1.2em; }
+
+.links { list-style: none; padding: 0; margin: 0; }
+.links li { padding: 0.25em 0; }
+.links li::before { content: "→ "; color: var(--dim); }
+
+footer { color: var(--dim); font-size: 0.9rem; padding-top: 2.5rem; padding-bottom: 3rem; }
+footer a { color: inherit; }
+
+@media (max-width: 480px) {
+  table, thead, tbody, tr, th, td { display: block; width: auto; }
+  thead { display: none; }
+  td { border-top: 0; padding: 0.35em 0; }
+  td:first-child, th:first-child { width: auto; padding-right: 0; }
+  td:first-child { padding-top: 0.8em; border-top: 1px solid var(--line); }
+  td:first-child::before { content: "written here — "; color: var(--dim); }
+  td:last-child::before { content: "borrowed — "; color: var(--dim); }
+}

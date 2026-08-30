@@ -1,0 +1,58 @@
+name: Pages
+
+# The site: docs/roadmap/website.md. Two hand-written files and one image
+# the terminal rendered of itself, deployed straight from site/ -- no
+# build step until W1 adds the generator. Anything on the page that the
+# repository does not produce is a bug, and the check below holds the
+# two promises a reviewer cannot see in a diff.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time, and never cancel one that is in flight: a
+# half-deployed site is worse than a stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy the site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check the page keeps its promises
+        # No script tag, ever; and the page with its one image stays under
+        # 300 KB, which is the budget W0 set so it loads on anything.
+        run: |
+          if grep -qi '<script' site/index.html; then
+            echo "site/index.html has a script tag" >&2; exit 1
+          fi
+          total=$(cat site/index.html site/site.css site/hero.png | wc -c)
+          echo "the page is $total bytes"
+          [ "$total" -lt 307200 ]
+
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
