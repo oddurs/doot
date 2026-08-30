@@ -167,7 +167,7 @@ class Doc:
 
 
 def split_row(line):
-    """A table row's cells: split on `|` outside code spans; `\|` is a pipe."""
+    r"""A table row's cells: split on `|` outside code spans; `\|` is a pipe."""
     cells, cur, in_code, k = [], [], False, 0
     line = line.strip()
     if line.startswith("|"):
