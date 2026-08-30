@@ -52,11 +52,19 @@ class Unsupported(Exception):
     pass
 
 
+def github_slug(text):
+    """The id GitHub gives a heading, so anchors written for GitHub work here."""
+    t = re.sub(r"[`*_\[\]()]", "", text).lower()
+    t = "".join(ch for ch in t if ch.isalnum() or ch in " -")
+    return t.replace(" ", "-")
+
+
 # ---- inline ---------------------------------------------------------------
 
 INLINE = re.compile(
     r"(?P<code>`[^`]+`)"
-    r"|(?P<bold>\*\*(?P<btext>[^*]+)\*\*)"
+    r"|(?P<bold>\*\*(?P<btext>.+?)\*\*)"
+    r"|(?P<strike>~~(?P<stext>[^~]+)~~)"
     r"|(?P<em>(?<![\w*])\*(?P<etext>[^*\s][^*]*?)\*(?![\w*]))"
     r"|(?P<img>!\[(?P<ialt>[^\]]*)\]\((?P<isrc>[^)]+)\))"
     r"|(?P<link>\[(?P<ltext>[^\]]+)\]\((?P<lhref>[^)]+)\))"
@@ -76,6 +84,8 @@ def inline(text, ctx):
             out.append("<strong>" + inline(m.group("btext"), ctx) + "</strong>")
         elif m.group("em"):
             out.append("<em>" + inline(m.group("etext"), ctx) + "</em>")
+        elif m.group("strike"):
+            out.append("<s>" + inline(m.group("stext"), ctx) + "</s>")
         elif m.group("img"):
             # Only the README's badges use images, and the README is not
             # rendered here; a doc that adds one gets a GitHub-hosted image
@@ -111,12 +121,16 @@ class Doc:
         self.url = pages[src_rel]
         self.pages = pages
         self.refs = {}
-        self.links = []  # (target, resolved) for the checker
+        self.links = []  # (target, resolved, target_rel, fragment) for the checker
+        self.ids = set()
         self.title = None
 
     def href(self, target):
         """Rewrite a Markdown link target to where it lives on the site."""
-        if re.match(r"^[a-z]+:", target) or target.startswith("#"):
+        if re.match(r"^[a-z]+:", target):
+            return target
+        if target.startswith("#"):
+            self.links.append((target, target, self.src_rel, target[1:]))
             return target
         path, _, frag = target.partition("#")
         rel = (self.src.parent / path).resolve()
@@ -128,9 +142,10 @@ class Doc:
             resolved = BASE + self.pages[rel] + "/" + ("#" + frag if frag else "")
         elif (REPO / rel).exists():
             resolved = BLOB + rel + ("#" + frag if frag else "")
+            rel = None  # GitHub's page, not ours to check anchors on
         else:
             resolved = None
-        self.links.append((target, resolved))
+        self.links.append((target, resolved, rel, frag))
         return resolved or target
 
 
@@ -164,7 +179,8 @@ def render(doc):
             text = m.group(2).strip()
             if doc.title is None and level == 1:
                 doc.title = re.sub(r"`", "", text)
-            slug = re.sub(r"[^a-z0-9]+", "-", re.sub(r"`|\*", "", text).lower()).strip("-")
+            slug = github_slug(text)
+            doc.ids.add(slug)
             body.append('<h%d id="%s">%s</h%d>' % (level, slug, inline(text, doc), level))
             i += 1
             continue
@@ -298,7 +314,7 @@ def git_date(path):
     ).stdout.strip().splitlines()
     if not out:
         return None
-    return datetime.fromisoformat(out[-1]).astimezone(timezone.utc)
+    return datetime.fromisoformat(out[-1])
 
 
 def build(check=False):
@@ -313,9 +329,14 @@ def build(check=False):
             problems.append("%s: %s" % (rel, e))
             continue
         docs[rel] = (d, body)
-        for target, resolved in d.links:
+        for target, resolved, _, _ in d.links:
             if resolved is None:
                 problems.append("%s: broken link %s" % (rel, target))
+    # Anchors, once every page knows its ids.
+    for rel, (d, body) in docs.items():
+        for target, resolved, target_rel, frag in d.links:
+            if frag and target_rel in docs and frag not in docs[target_rel][0].ids:
+                problems.append("%s: dead anchor %s" % (rel, target))
 
     # Write pages.
     if OUT.exists():
@@ -335,7 +356,7 @@ def build(check=False):
     for rel, (d, body) in docs.items():
         if rel.startswith("docs/roadmap/completed/"):
             records.append((git_date(rel), d, body))
-    records.sort(key=lambda r: (r[0] or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+    records.sort(key=lambda r: (r[0] or datetime.min.replace(tzinfo=timezone.utc)).timestamp(), reverse=True)
     items = []
     for when, d, body in records:
         first_p = re.search(r"<p>(.*?)</p>", body)
