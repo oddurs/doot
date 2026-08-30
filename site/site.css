@@ -124,3 +124,38 @@ footer a { color: inherit; }
   td:first-child::before { content: "written here — "; color: var(--dim); }
   td:last-child::before { content: "borrowed — "; color: var(--dim); }
 }
+
+/* ---- rendered documents: /docs/…, /contributing/, /log/ ---------------- */
+
+body.doc main { max-width: 78ch; padding-top: 0.5rem; }
+.crumbs { max-width: 78ch; margin: 0 auto; padding: 1.2rem clamp(12px, 4vw, 24px) 0; color: var(--dim); font-size: 0.9rem; }
+.crumbs a { color: var(--dim); text-decoration: none; }
+.crumbs a:hover { color: var(--fg); text-decoration: underline; }
+body.doc h1 { font-size: clamp(1.7rem, 5vw, 2.4rem); margin: 1.2rem 0 0.6rem; letter-spacing: -0.01em; }
+body.doc h1::after { content: none; }
+body.doc h2 { margin-top: 2rem; }
+body.doc h3 { font-size: 1rem; margin: 1.6rem 0 0.4rem; color: var(--fg); }
+body.doc h3::before { content: "## "; color: var(--dim); font-weight: 400; }
+body.doc h4 { font-size: 0.95rem; margin: 1.2rem 0 0.3rem; color: var(--dim); }
+body.doc .sub { color: var(--dim); font-size: 0.85rem; margin: -0.3rem 0 1.2rem; }
+body.doc p, body.doc li { max-width: 72ch; }
+body.doc ul, body.doc ol { padding-left: 1.4em; margin: 0 0 0.9rem; }
+body.doc li { margin: 0.25em 0; }
+body.doc li > ol { margin: 0.3em 0 0.2em; }
+body.doc strong { color: var(--fg); }
+body.doc em { font-style: italic; color: var(--fg); }
+body.doc blockquote { margin: 0.9rem 0; padding: 0.1rem 0 0.1rem 1em; border-left: 3px solid var(--accent); color: var(--dim); }
+body.doc blockquote p { margin: 0.3rem 0; }
+body.doc pre { margin: 0 0 1rem; padding: 0.8em 1em; overflow-x: auto; background: color-mix(in srgb, var(--fg) 6%, var(--bg)); border: 1px solid var(--line); border-radius: 8px; font-size: 0.9rem; line-height: 1.45; }
+body.doc pre code { color: var(--fg); }
+body.doc table { display: block; overflow-x: auto; max-width: 100%; margin: 0.6rem 0 1.2rem; }
+body.doc th, body.doc td { padding: 0.45em 1em 0.45em 0; }
+body.doc td:first-child, body.doc th:first-child { width: auto; padding-right: 1em; }
+body.doc td { min-width: 8ch; }
+body.doc hr { border: 0; border-top: 1px solid var(--line); margin: 2rem 0; }
+body.doc a:hover { color: var(--fg); }
+.log { list-style: none; padding: 0; }
+.log li { margin: 0 0 1.2rem; padding-left: 0; }
+.log li::before { content: none; }
+.log .when { color: var(--dim); font-size: 0.85rem; margin-right: 0.6em; }
+.log p { margin: 0.25rem 0 0; color: var(--dim); }

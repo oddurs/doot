@@ -84,5 +84,5 @@ The DA1 string is a constant. DSR 5 is a constant. CPR and DECXCPR are
 two integers that the program set itself. Nothing else is sent to the child unasked,
 and nothing that is sent is derived from cell contents, the title, the
 clipboard, or any other tab. The test for that row prints a marker on
-the screen, asks all three questions, and asserts the marker is absent
+the screen, asks all four questions, and asserts the marker is absent
 from every answer — and that the answers are exactly the strings above.

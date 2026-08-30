@@ -17,3 +17,4 @@ zig-out/
 
 # Gallery renders (regenerate with `zig build gallery`)
 /bench/gallery/current/
+site/out/

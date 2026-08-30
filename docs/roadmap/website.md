@@ -28,7 +28,7 @@ cannot drift.
 | Site | One page at [oddurs.github.io/doot](https://oddurs.github.io/doot/), deployed from `site/` by Actions (W0) | `.github/workflows/pages.yml` |
 | Screenshots | The gallery's references, and the front page's frame, rendered by the binary from a scene | `bench/gallery/`, `site/render.sh` |
 | Pitch | The README's first paragraph and the repository description | `README.md` |
-| Docs | Fourteen files under `docs/`, readable only on GitHub | `docs/` |
+| Docs | Rendered at `/docs/…` by `site/build.py`, with the sprint records as `/log/` (W1) | `site/build.py` |
 | Numbers | `bench/baseline.txt`, `--frame-stats` output in sprint records | `bench/`, `docs/roadmap/completed/` |
 | Changelog | `CHANGELOG.md`, Keep-a-Changelog form | — |
 | Name | `doot`, since [the rename](completed/sprint-n-rename-doot.md): four letters, no Homebrew or GitHub collision, `doot.sh` free at the time | — |
@@ -83,7 +83,7 @@ scene rendered by the binary itself (`site/hero.sh`, `site/render.sh`),
 and rendering it found two glyphs the system face lacks. See
 [the record](completed/sprint-w0-site.md).
 
-### W1 — Docs and the engineering log (one week)
+### W1 — Docs and the engineering log — **done**
 
 A generator, `site/build.py`, beside `bench/gen_corpus.py` and with the
 same rule — standard library only. It renders `docs/` to `/docs/…` and
@@ -109,6 +109,12 @@ record; the build fails on a broken link or an unknown construct.
 
 *Risk:* low. The Markdown subset is small because the docs are
 disciplined; keep both true.
+
+*Result:* done — [/docs/](https://oddurs.github.io/doot/docs/) and
+[/log/](https://oddurs.github.io/doot/log/). The subset was measured
+before it was written — every construct in every Markdown file counted —
+and 39 pages render with zero unsupported constructs and zero broken
+links. See [the record](completed/sprint-w1-docs.md).
 
 ### W2 — Numbers that are live (one week)
 
