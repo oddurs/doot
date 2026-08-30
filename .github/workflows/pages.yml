@@ -13,6 +13,11 @@ on:
       - 'site/**'
       - 'docs/**'
       - 'CONTRIBUTING.md'
+      # Pages link to these, so a rename must redeploy or the link checker
+      # will fail on a later, unrelated push.
+      - 'README.md'
+      - 'SECURITY.md'
+      - 'CLAUDE.md'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 

@@ -25,7 +25,7 @@ cannot drift.
 
 | | Today | Where |
 |---|---|---|
-| Site | One page at [oddurs.github.io/doot](https://oddurs.github.io/doot/), deployed from `site/` by Actions (W0) | `.github/workflows/pages.yml` |
+| Site | [oddurs.github.io/doot](https://oddurs.github.io/doot/), built by `site/build.py` into `site/out/` and deployed by Actions (W0, W1) | `.github/workflows/pages.yml` |
 | Screenshots | The gallery's references, and the front page's frame, rendered by the binary from a scene | `bench/gallery/`, `site/render.sh` |
 | Pitch | The README's first paragraph and the repository description | `README.md` |
 | Docs | Rendered at `/docs/…` by `site/build.py`, with the sprint records as `/log/` (W1) | `site/build.py` |
@@ -113,8 +113,8 @@ disciplined; keep both true.
 *Result:* done — [/docs/](https://oddurs.github.io/doot/docs/) and
 [/log/](https://oddurs.github.io/doot/log/). The subset was measured
 before it was written — every construct in every Markdown file counted —
-and 39 pages render with zero unsupported constructs and zero broken
-links. See [the record](completed/sprint-w1-docs.md).
+and 40 pages render with zero unsupported constructs, zero broken
+links and zero dead anchors. See [the record](completed/sprint-w1-docs.md).
 
 ### W2 — Numbers that are live (one week)
 

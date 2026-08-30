@@ -32,6 +32,18 @@ GITHUB = "https://github.com/oddurs/doot"
 # for a local root, e.g. `SITE_BASE= python3 site/build.py`.
 BASE = os.environ.get("SITE_BASE", "/doot")
 BLOB = GITHUB + "/blob/main/"
+TREE = GITHUB + "/tree/main/"
+REF_DEF = re.compile(r"^\[([^\]]+)\]:\s+(\S+)\s*$")
+
+
+def tracked():
+    """Every path git knows, so a link to something only on disk fails here too."""
+    out = subprocess.run(["git", "ls-files", "-z"], cwd=REPO, capture_output=True, text=True).stdout
+    return set(out.split("\0")) - {""}
+
+
+TRACKED = None
+PAGE_URLS = set()
 
 # What gets rendered, and where. Keys are repo-relative source paths;
 # values are site paths (directories -- every page is <dir>/index.html).
@@ -103,13 +115,11 @@ def inline(text, ctx):
             href = ctx.href(ctx.refs[key])
             out.append('<a href="%s">%s</a>' % (html.escape(href, quote=True), inline(m.group("rtext"), ctx)))
     out.append(html.escape(text[pos:]))
-    s = "".join(out)
-    if "<" in text.replace("<code>", "") and re.search(r"<[a-zA-Z/!][^>]*>", text):
-        # Raw HTML outside of inline code is not in the subset; inside
-        # code it was escaped above, so anything that survives is real.
-        if re.search(r"<[a-zA-Z/!][^>]*>", re.sub(r"`[^`]+`", "", text)):
-            raise Unsupported("raw html: " + text.strip()[:60])
-    return s
+    # Raw HTML is not in the subset. Inside inline code it was escaped
+    # above; anything tag-shaped that survives outside code is refused.
+    if re.search(r"<[a-zA-Z/!][^>]*>", re.sub(r"`[^`]+`", "", text)):
+        raise Unsupported("looks like raw html, which is not in the subset: " + text.strip()[:60])
+    return "".join(out)
 
 
 # ---- blocks ---------------------------------------------------------------
@@ -138,22 +148,55 @@ class Doc:
             rel = rel.relative_to(REPO).as_posix()
         except ValueError:
             raise Unsupported("link escapes the repository: " + target)
+        readme = rel.rstrip("/") + "/README.md"
         if rel in self.pages:
             resolved = BASE + self.pages[rel] + "/" + ("#" + frag if frag else "")
-        elif (REPO / rel).exists():
+        elif rel.rstrip("/") == "docs/roadmap/completed":
+            resolved, rel = BASE + "/log/", None
+        elif readme in self.pages:
+            resolved, rel = BASE + self.pages[readme] + "/", readme
+        elif rel in TRACKED:
             resolved = BLOB + rel + ("#" + frag if frag else "")
             rel = None  # GitHub's page, not ours to check anchors on
+        elif any(t.startswith(rel.rstrip("/") + "/") for t in TRACKED):
+            resolved, rel = TREE + rel.rstrip("/"), None
         else:
             resolved = None
         self.links.append((target, resolved, rel, frag))
         return resolved or target
 
 
+def split_row(line):
+    """A table row's cells: split on `|` outside code spans; `\|` is a pipe."""
+    cells, cur, in_code, k = [], [], False, 0
+    line = line.strip()
+    if line.startswith("|"):
+        line = line[1:]
+    if line.endswith("|") and not line.endswith("\\|"):
+        line = line[:-1]
+    while k < len(line):
+        ch = line[k]
+        if ch == "\\" and k + 1 < len(line) and line[k + 1] == "|":
+            cur.append("|")
+            k += 2
+            continue
+        if ch == "`":
+            in_code = not in_code
+        if ch == "|" and not in_code:
+            cells.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+        k += 1
+    cells.append("".join(cur))
+    return cells
+
+
 def render(doc):
     lines = doc.src.read_text(encoding="utf-8").split("\n")
     # Reference definitions first, so a link can precede its definition.
     for line in lines:
-        m = re.match(r"^\[([^\]]+)\]:\s+(\S+)\s*$", line)
+        m = REF_DEF.match(line)
         if m:
             doc.refs[m.group(1).lower()] = m.group(2)
     body = []
@@ -170,7 +213,7 @@ def render(doc):
         if not line.strip():
             i += 1
             continue
-        if re.match(r"^\[([^\]]+)\]:\s+\S+\s*$", line):
+        if REF_DEF.match(line):
             i += 1
             continue
         m = re.match(r"^(#{1,6}) (.*)$", line)
@@ -197,10 +240,13 @@ def render(doc):
             j = i
             while j < n and lines[j].startswith("|"):
                 j += 1
-            rows = [r.strip().strip("|").split("|") for r in lines[i:j]]
+            rows = [split_row(r) for r in lines[i:j]]
             if len(rows) < 2 or not all(re.match(r"^\s*:?-+:?\s*$", c) for c in rows[1]):
                 raise Unsupported("table without an alignment row at line %d" % (i + 1))
             head, rest = rows[0], rows[2:]
+            for k, r in enumerate(rows):
+                if len(r) != len(head):
+                    raise Unsupported("table row %d has %d cells, the header has %d" % (i + 1 + k, len(r), len(head)))
             t = ["<table><thead><tr>"]
             t += ["<th>%s</th>" % inline(c.strip(), doc) for c in head]
             t.append("</tr></thead><tbody>")
@@ -228,7 +274,6 @@ def render(doc):
             tag = "ol" if ordered else "ul"
             items = []
             j = i
-            item_re = re.compile(r"^(\d+\.|[-*]) (.*)$") if True else None
             while j < n:
                 mm = re.match(r"^(\d+\.|[-*]) (.*)$", lines[j])
                 if not mm or (mm.group(1)[0].isdigit()) != ordered:
@@ -239,9 +284,14 @@ def render(doc):
                 # indented too, and is the only nesting the docs use.
                 nested = []
                 while j < n and lines[j].startswith("  ") and lines[j].strip():
-                    sub = lines[j].strip()
+                    raw = lines[j]
+                    sub = raw.strip()
+                    if re.match(r"^[-*+] ", sub) or sub.startswith("```"):
+                        raise Unsupported("a nested bullet or a fence inside a list item at line %d" % (j + 1))
                     nm = re.match(r"^(\d+\.) (.*)$", sub)
-                    if nm and (nested or lines[j].startswith("  " + nm.group(1))):
+                    if nm:
+                        if not raw.startswith("  " + nm.group(1)):
+                            raise Unsupported("a nested ordered item must be indented exactly two spaces, line %d" % (j + 1))
                         nested.append(nm.group(2))
                     elif nested:
                         nested[-1] += " " + sub
@@ -282,7 +332,12 @@ def page(title, body, url, subtitle=None):
     acc = ""
     for p in parts[:-1]:
         acc += "/" + p
-        crumbs.append('<a href="%s%s/">%s</a>' % (BASE, acc, html.escape(p)))
+        if acc == "/docs/roadmap/completed":
+            crumbs.append('<a href="%s/log/">%s</a>' % (BASE, html.escape(p)))
+        elif acc in PAGE_URLS:
+            crumbs.append('<a href="%s%s/">%s</a>' % (BASE, acc, html.escape(p)))
+        else:
+            crumbs.append(html.escape(p))
     nav = " / ".join(['<a href="%s/">doot</a>' % BASE] + crumbs)
     sub = "<p class=\"sub\">%s</p>" % subtitle if subtitle else ""
     return """<!doctype html>
@@ -307,18 +362,33 @@ def page(title, body, url, subtitle=None):
 """ % (html.escape(title), html.escape(describe(body), quote=True), BASE, nav, body, sub, GITHUB)
 
 
-def git_date(path):
+def added_dates(directory):
+    """{path: datetime} for every file under `directory`, from the commit that added it.
+
+    One git call; the log is newest first, so the last mention of a path
+    is the commit that added it. The datetime keeps the commit's own
+    offset, because the day it was committed is the day to show.
+    """
     out = subprocess.run(
-        ["git", "log", "--diff-filter=A", "--follow", "--format=%cI", "--", path],
+        ["git", "log", "--diff-filter=A", "--format=%x1e%cI", "--name-only", "--", directory],
         cwd=REPO, capture_output=True, text=True,
-    ).stdout.strip().splitlines()
-    if not out:
-        return None
-    return datetime.fromisoformat(out[-1])
+    ).stdout
+    dates = {}
+    for block in out.split("\x1e"):
+        lines = [l for l in block.strip().splitlines() if l.strip()]
+        if not lines:
+            continue
+        when = datetime.fromisoformat(lines[0])
+        for path in lines[1:]:
+            dates[path] = when
+    return dates
 
 
 def build(check=False):
+    global TRACKED, PAGE_URLS
+    TRACKED = tracked()
     pages = sources()
+    PAGE_URLS = set(pages.values())
     docs = {}
     problems = []
     for rel in pages:
@@ -353,9 +423,12 @@ def build(check=False):
 
     # The engineering log: completed records, newest first.
     records = []
+    dates = added_dates("docs/roadmap/completed")
     for rel, (d, body) in docs.items():
         if rel.startswith("docs/roadmap/completed/"):
-            records.append((git_date(rel), d, body))
+            if rel not in dates:
+                problems.append("%s: no commit adds it, so the log cannot date it (a shallow clone?)" % rel)
+            records.append((dates.get(rel), d, body))
     records.sort(key=lambda r: (r[0] or datetime.min.replace(tzinfo=timezone.utc)).timestamp(), reverse=True)
     items = []
     for when, d, body in records:

@@ -50,7 +50,7 @@ with the page, the untidiness W0 noted.
 
 | | |
 |---|---|
-| Documents rendered | 38 under `docs/`, plus `CONTRIBUTING.md`; 39 pages with the log |
+| Documents rendered | 37 under `docs/`, plus `CONTRIBUTING.md`; 40 pages with the front page and the log — the count the build prints |
 | Unsupported constructs found in the docs | 0 |
 | Broken links found by the build | 0 |
 | Internal links crawled over HTTP under `/doot/`, from six pages | 41, all resolve |
