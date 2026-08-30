@@ -37,6 +37,9 @@ ended at and prints its grid checksum.
 | `Cmd V` | paste (bracketed when the app asks for it) |
 | `Cmd K` | clear |
 | `Cmd ⇧ R` | start or stop recording keystrokes, now |
+| `Cmd ⇧ ↑` / `↓` | the last frame of the previous / next full-screen program that closed — scroll back into a closed `vim` |
+| `Cmd ⇧ ←` / `→` | step a second back / forward through the session (ten with `Option`) |
+| `Esc` | back to live, from anywhere in the session's history |
 | wheel | scroll history, or arrow keys on the alternate screen |
 | drag | select; double-click a word, triple-click a whole logical line |
 | `⇧` click | extend the selection |
@@ -107,6 +110,8 @@ with no window server at all.
 | `png.zig` | A small PNG encoder and decoder, so screenshots need no image library. |
 | `rec.zig` | The `.trec` session log: the format, the writer, the reader, the sessions directory and the retention sweep. |
 | `replay.zig` | `.trec` in, `Terminal` out — the screen rebuilt from the log. `zig build replay`. |
+| `ckpt.zig` | A whole `Terminal` serialised — exactly what `check.zig` hashes, plus the three things it deliberately does not. The unit of a seek. |
+| `seek.zig` | The in-memory checkpoint index, built from the log on its own thread, never from the live terminal. |
 | `sel.zig` | The selection model: line ids, word boundaries, wide-char snapping, what a copy produces. No SDL, so all of it is tested. |
 | `check.zig` | `checksum(term)`: a hash over everything a replay has to reproduce. The arbiter. |
 | `record.zig` | Records a command's terminal output, keystrokes and all, as a corpus. |

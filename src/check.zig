@@ -158,6 +158,49 @@ pub fn checksum(term: *Terminal) u64 {
     return h.final();
 }
 
+/// One field this checksum claims to cover, and the bytes that move it.
+///
+/// **Exported on purpose.** L1's checkpoint codec has to carry everything
+/// hashed here, and the two files drifting apart is the way a seek silently
+/// loses a field. `src/ckpt.zig`'s round-trip test iterates *this* table
+/// rather than a copy of it, so a case added here is a case exercised there
+/// without anyone remembering to. The comptime field counts in `ckpt.zig` are
+/// the other half of the same mechanism.
+pub const FieldCase = struct { name: []const u8, bytes: []const u8 };
+
+const case_base = "text\r\n\x1b[2;3Hx";
+
+pub const field_cases = [_]FieldCase{
+    .{ .name = "a printed cell", .bytes = case_base ++ "Z" },
+    .{ .name = "cursor position", .bytes = case_base ++ "\x1b[5;5H" },
+    .{ .name = "cursor colour", .bytes = case_base ++ "\x1b[38;5;99m" },
+    .{ .name = "cursor attributes", .bytes = case_base ++ "\x1b[1m" },
+    .{ .name = "saved cursor", .bytes = case_base ++ "\x1b[9;9H\x1b7\x1b[1;1H" },
+    .{ .name = "scroll region", .bytes = case_base ++ "\x1b[2;4r" },
+    .{ .name = "wrap mode", .bytes = case_base ++ "\x1b[?7l" },
+    .{ .name = "cursor visibility", .bytes = case_base ++ "\x1b[?25l" },
+    .{ .name = "application cursor keys", .bytes = case_base ++ "\x1b[?1h" },
+    .{ .name = "origin mode", .bytes = case_base ++ "\x1b[?6h" },
+    .{ .name = "bracketed paste", .bytes = case_base ++ "\x1b[?2004h" },
+    .{ .name = "mouse reporting", .bytes = case_base ++ "\x1b[?1000h" },
+    .{ .name = "the mouse encoding", .bytes = case_base ++ "\x1b[?1006h" },
+    .{ .name = "the alt screen", .bytes = case_base ++ "\x1b[?1049h" },
+    .{ .name = "tab stops", .bytes = case_base ++ "\x1b[3g" },
+    .{ .name = "scrollback", .bytes = case_base ++ "\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n" },
+    // Not hashed by this file, and carried by a checkpoint all the same --
+    // which is exactly why the table is shared. See `ckpt.zig`'s header.
+    .{ .name = "the window title", .bytes = case_base ++ "\x1b]0;a title\x07" },
+    .{ .name = "a wrapped row", .bytes = "abcdefghijklmnopqrstuvwxyz0123456789" },
+    // **Exactly twenty printable characters**, which is the width both this
+    // file's test and `ckpt.zig`'s round-trip build their terminals at. The
+    // cursor then sits past the last column with the wrap deferred, which is
+    // a state no other case here reaches: 36 characters wrap and land at
+    // column 17 with `pending_wrap` false. A checkpoint that dropped the flag
+    // survived the whole first mutation pass because of that gap.
+    .{ .name = "a deferred wrap at the right margin", .bytes = case_base ++ "\x1b[4;1H01234567890123456789" },
+    .{ .name = "the application keypad", .bytes = case_base ++ "\x1b=" },
+};
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -201,34 +244,21 @@ test "a rotated screen does not hash the same as an unrotated one" {
 }
 
 test "every field the checksum claims to cover moves it" {
-    const Case = struct { name: []const u8, bytes: []const u8 };
-    const base = "text\r\n\x1b[2;3Hx";
-
-    const cases = [_]Case{
-        .{ .name = "a printed cell", .bytes = base ++ "Z" },
-        .{ .name = "cursor position", .bytes = base ++ "\x1b[5;5H" },
-        .{ .name = "cursor colour", .bytes = base ++ "\x1b[38;5;99m" },
-        .{ .name = "cursor attributes", .bytes = base ++ "\x1b[1m" },
-        .{ .name = "saved cursor", .bytes = base ++ "\x1b[9;9H\x1b7\x1b[1;1H" },
-        .{ .name = "scroll region", .bytes = base ++ "\x1b[2;4r" },
-        .{ .name = "wrap mode", .bytes = base ++ "\x1b[?7l" },
-        .{ .name = "cursor visibility", .bytes = base ++ "\x1b[?25l" },
-        .{ .name = "application cursor keys", .bytes = base ++ "\x1b[?1h" },
-        .{ .name = "origin mode", .bytes = base ++ "\x1b[?6h" },
-        .{ .name = "bracketed paste", .bytes = base ++ "\x1b[?2004h" },
-        .{ .name = "mouse reporting", .bytes = base ++ "\x1b[?1000h" },
-        .{ .name = "the mouse encoding", .bytes = base ++ "\x1b[?1006h" },
-        .{ .name = "the alt screen", .bytes = base ++ "\x1b[?1049h" },
-        .{ .name = "tab stops", .bytes = base ++ "\x1b[3g" },
-        .{ .name = "scrollback", .bytes = base ++ "\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n" },
-    };
-
     var plain = try Terminal.init(testing.allocator, 20, 5);
     defer plain.deinit();
-    feed(&plain, base);
+    feed(&plain, case_base);
     const reference = checksum(&plain);
 
-    for (cases) |case| {
+    // One case in the shared table is deliberately *not* hashed here: the
+    // title is window state, and a checkpoint carries it all the same. That
+    // asymmetry is the reason the table is shared rather than duplicated, so
+    // the exclusion is named here instead of being kept out of the table.
+    const not_hashed = [_][]const u8{"the window title"};
+
+    cases: for (field_cases) |case| {
+        for (not_hashed) |n| {
+            if (std.mem.eql(u8, n, case.name)) continue :cases;
+        }
         var t = try Terminal.init(testing.allocator, 20, 5);
         defer t.deinit();
         feed(&t, case.bytes);

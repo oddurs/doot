@@ -21,6 +21,8 @@ const stats = @import("stats.zig");
 const cli = @import("cli.zig");
 const rec = @import("rec.zig");
 const sel = @import("sel.zig");
+const seek = @import("seek.zig");
+const ckpt = @import("ckpt.zig");
 const version = @import("version.zig");
 const Terminal = @import("terminal.zig").Terminal;
 const Pty = @import("pty.zig").Pty;
@@ -79,6 +81,24 @@ const App = struct {
     rec_mutex: Mutex,
     rec: rec.Writer,
 
+    /// L1: where the window is looking, and what it takes to get there.
+    ///
+    /// Owned by the **main thread outright**. The seek worker touches only
+    /// `seek_build`, and only until it sets that build's `done` flag; nothing
+    /// here is ever read from two threads at once, which is why none of it
+    /// needs a mutex of its own.
+    seek: seek.State,
+    seek_build: ?*seek.Build = null,
+    seek_thread: ?std.Thread = null,
+    /// What to do once the index arrives, because the key that asked for it
+    /// was pressed before the build existed.
+    seek_pending: ?SeekAction = null,
+    /// The live terminal said it changed while the window was showing
+    /// history. Consumed under the terminal mutex either way -- see the main
+    /// loop -- and remembered here, so the live screen repaints the moment
+    /// the seek ends rather than waiting for the child to print again.
+    live_dirty: bool = true,
+
     running: std.atomic.Value(bool) = .init(true),
     /// A wake event is already queued, so don't queue another. Without this,
     /// a command producing megabytes of output floods the SDL event queue
@@ -122,6 +142,363 @@ const Mouse = struct {
     /// under a stationary pointer is a different line once the view moves.
     px: struct { x: i32 = 0, y: i32 = 0 } = .{},
 };
+
+/// What a seek key asked for. Held rather than acted on when the index is
+/// still being built, so a key press is never silently dropped.
+const SeekAction = union(enum) {
+    prev_span,
+    next_span,
+    step: i64,
+    to_end,
+    to_time_us: u64,
+};
+
+// ---------------------------------------------------------------------------
+// Seeking: the glue
+// ---------------------------------------------------------------------------
+//
+// Everything that decides anything is in `seek.zig`, which has no SDL in it
+// and is unit-tested without a window. What is here is the thread, the file
+// path, and the one place the recorder mutex is taken.
+
+/// A copy of the recording's path, with the log flushed to the present.
+///
+/// The **one** time L1 takes `rec_mutex`, and it is taken on its own: never
+/// inside the terminal mutex, so the `lock` column cannot see it. The flush
+/// can cost a 64 KiB `write(2)` -- L0 measured 1,002-2,760 µs -- and it is
+/// paid once per entry into seek mode, on the main thread, because without it
+/// the log stops short of the present and "seek to now == live" is false.
+fn seekPath(app: *App, alloc: std.mem.Allocator) ?[:0]u8 {
+    app.rec_mutex.lock();
+    defer app.rec_mutex.unlock();
+    if (!app.rec.recording or app.rec.path.len == 0) return null;
+    app.rec.flushForSeek(stats.nowNs());
+    return alloc.dupeZ(u8, app.rec.path) catch null;
+}
+
+fn seekWorker(app: *App) void {
+    seek.runBuild(app.seek_build.?);
+    // The main thread may be parked in `SDL_WaitEvent`; without this an idle
+    // session would sit on "building the index ..." until something else
+    // happened to wake it.
+    app.requestWake();
+}
+
+/// A seek key was pressed. Start (or refresh) the index, then act.
+fn seekAction(app: *App, alloc: std.mem.Allocator, action: SeekAction, report: bool) void {
+    if (app.seek.mode == .unavailable) return;
+    // Already seeking with an index in hand: this is the interactive path,
+    // and it is a decode plus a bounded replay. No file, no thread, no lock.
+    if (app.seek.mode == .seeking and app.seek_build == null) {
+        applySeek(app, action, report);
+        return;
+    }
+    if (app.seek_build != null) {
+        app.seek_pending = action; // a build is already in flight
+        return;
+    }
+
+    const path = seekPath(app, alloc) orelse {
+        app.seek.mode = .unavailable;
+        if (app.seek.reason.len == 0) {
+            app.seek.reason = "this session is not being recorded";
+        }
+        return;
+    };
+    const build = alloc.create(seek.Build) catch {
+        alloc.free(path);
+        return;
+    };
+    build.* = .{
+        .alloc = alloc,
+        .path = path,
+        .from_offset = app.seek.next_offset,
+        .at_us_base = app.seek.last_at_us,
+        // Borrowed for the worker's lifetime. Safe because a build is in
+        // flight for exactly as long as `app.seek_build` is non-null, and
+        // every path that would append to `events` returns early on that.
+        .prior = app.seek.events.items,
+        .prior_header = app.seek.header,
+    };
+    app.seek_build = build;
+    app.seek_pending = action;
+    app.seek.mode = .building;
+    app.seek_thread = std.Thread.spawn(.{}, seekWorker, .{app}) catch {
+        build.deinit();
+        alloc.destroy(build);
+        app.seek_build = null;
+        app.seek.mode = .unavailable;
+        app.seek.reason = "could not start the seek worker";
+        return;
+    };
+}
+
+/// Has the worker finished? Returns whether anything changed.
+fn pollSeekBuild(app: *App, alloc: std.mem.Allocator, report: bool) bool {
+    const build = app.seek_build orelse return false;
+    if (!build.done.load(.acquire)) return false;
+
+    if (app.seek_thread) |t| t.join();
+    app.seek_thread = null;
+    app.seek_build = null;
+
+    const took_ns = build.took_ns;
+    const read_ns = build.read_ns;
+    app.seek.absorb(build) catch {
+        app.seek.mode = .unavailable;
+        app.seek.reason = "the index could not be built";
+    };
+    build.deinit();
+    alloc.destroy(build);
+
+    if (report) {
+        if (app.seek.index) |idx| {
+            // `read` against `total` is the split that says whether the
+            // worker is I/O-bound or replay-bound, which is the number that
+            // decides whether a lazier build is worth building.
+            std.debug.print(
+                "seek: index {d} entries, {d} spans, {d} KiB, {d} events, worker {d} ms ({d} ms read)\n",
+                .{
+                    idx.entries.items.len,
+                    idx.spans.items.len,
+                    idx.bytes / 1024,
+                    idx.events,
+                    took_ns / std.time.ns_per_ms,
+                    read_ns / std.time.ns_per_ms,
+                },
+            );
+        }
+    }
+
+    if (app.seek_pending) |action| {
+        app.seek_pending = null;
+        if (app.seek.mode != .unavailable) applySeek(app, action, report);
+    }
+    return true;
+}
+
+fn seekOnce(app: *App, action: SeekAction) !void {
+    switch (action) {
+        .prev_span => {
+            // Nothing to jump to -- a session with no full-screen program in
+            // it -- lands at the end of the log instead of doing nothing, so
+            // the key always says something and the status row explains why.
+            if (!try app.seek.prevSpan() and app.seek.mode != .seeking) {
+                try app.seek.toEnd();
+            }
+        },
+        .next_span => {
+            if (!try app.seek.nextSpan() and app.seek.mode == .seeking) {
+                try app.seek.toEnd();
+            }
+        },
+        .step => |d| {
+            // Stepping from live starts at the end of the log, which is the
+            // screen you are already looking at.
+            if (app.seek.mode != .seeking) try app.seek.toEnd();
+            try app.seek.stepSeconds(d);
+        },
+        .to_end => try app.seek.toEnd(),
+        .to_time_us => |us| try app.seek.seekTo(
+            ckpt.eventAtTime(app.seek.events.items, us),
+        ),
+    }
+}
+
+fn applySeek(app: *App, action: SeekAction, report: bool) void {
+    seekOnce(app, action) catch {
+        app.seek.mode = .unavailable;
+        app.seek.reason = "nothing recorded yet";
+        return;
+    };
+    if (report) {
+        std.debug.print("seek: {d} ms end to end, {d} events replayed forward\n", .{
+            app.seek.last_seek_ns / std.time.ns_per_ms,
+            app.seek.last_replayed,
+        });
+    }
+}
+
+/// Back to the live terminal. Cheap: the index and the view terminal stay,
+/// so the next seek is a decode rather than a rebuild.
+fn exitSeek(app: *App) void {
+    if (app.seek.mode == .live) return;
+    app.seek.mode = .live;
+    app.seek_pending = null;
+    // The live screen has been changing behind the seek and its `dirty` flag
+    // was consumed every frame. Without this it would come back stale.
+    app.live_dirty = true;
+}
+
+/// `--seek N` / `--seek-span N`, applied on the way out so the screenshot
+/// shows a moment rather than the end. Errors are reported and not fatal: a
+/// capture that could not seek should still capture something.
+fn captureSeek(app: *App, alloc: std.mem.Allocator, opts: cli.Options) void {
+    if (!app.rec.recording and app.rec.path.len == 0) {
+        std.debug.print("doot: --seek: this session was not recorded\n", .{});
+        return;
+    }
+    const path = alloc.dupeZ(u8, app.rec.path) catch return;
+    var build = seek.Build{ .alloc = alloc, .path = path };
+    seek.runBuild(&build);
+    defer build.deinit();
+
+    app.seek.absorb(&build) catch {
+        std.debug.print("doot: --seek: the index could not be built\n", .{});
+        return;
+    };
+    if (app.seek.mode == .unavailable) {
+        std.debug.print("doot: --seek: {s}\n", .{app.seek.reason});
+        return;
+    }
+    // The same line the interactive path prints, so `--frame-stats --seek 0`
+    // is a way to get the index's real size and build cost out of a headless
+    // run. It is how the sprint's memory figure was measured.
+    if (opts.frame_stats) {
+        if (app.seek.index) |idx| std.debug.print(
+            "seek: index {d} entries, {d} spans, {d} KiB, {d} events, worker {d} ms ({d} ms read)\n",
+            .{
+                idx.entries.items.len,
+                idx.spans.items.len,
+                idx.bytes / 1024,
+                idx.events,
+                build.took_ns / std.time.ns_per_ms,
+                build.read_ns / std.time.ns_per_ms,
+            },
+        );
+    }
+
+    if (opts.seek_sweep > 0) {
+        seekSweep(app, opts.seek_sweep);
+        return;
+    }
+
+    if (opts.seek_span) |n| {
+        // Counting back from the end: 1 is the most recent closed
+        // full-screen program, which is what `Cmd ⇧ ↑` lands on.
+        var left = @max(n, 1);
+        while (left > 0) : (left -= 1) {
+            const found = app.seek.prevSpan() catch false;
+            if (!found) {
+                std.debug.print("doot: --seek-span: only {d} span(s) in this session\n", .{
+                    @max(n, 1) - left,
+                });
+                break;
+            }
+        }
+    } else if (opts.seek) |s| {
+        const total_us = app.seek.durationUs();
+        const want_us: u64 = if (s < 0)
+            total_us -| @as(u64, @intFromFloat(@min(-s, 1e12) * 1e6))
+        else
+            @min(@as(u64, @intFromFloat(@min(s, 1e12) * 1e6)), total_us);
+        app.seek.seekTo(ckpt.eventAtTime(app.seek.events.items, want_us)) catch {
+            std.debug.print("doot: --seek: nothing recorded yet\n", .{});
+        };
+    }
+}
+
+/// `--seek-sweep N`: seek to N evenly spaced moments and report what each
+/// one cost, end to end.
+///
+/// The gate's latency criterion is a p95, and a p95 needs a sample. Every
+/// seek here goes through the same `State.seekTo` a key press calls -- the
+/// same decode, the same bounded forward replay, into the same reused view
+/// terminal -- so the distribution is the distribution of the key press.
+fn seekSweep(app: *App, n: u32) void {
+    const total_us = app.seek.durationUs();
+    var samples: [cli.max_seek_sweep]u64 = undefined;
+    var replayed: u64 = 0;
+    var worst_replayed: usize = 0;
+    var taken: usize = 0;
+
+    for (0..n) |i| {
+        // Inclusive of both ends, so the first sample is the empty terminal
+        // and the last is "seek to now".
+        const want_us = if (n <= 1) total_us else total_us * i / (n - 1);
+        const ev = ckpt.eventAtTime(app.seek.events.items, want_us);
+        app.seek.seekTo(ev) catch continue;
+        samples[taken] = app.seek.last_seek_ns;
+        taken += 1;
+        replayed += app.seek.last_replayed;
+        worst_replayed = @max(worst_replayed, app.seek.last_replayed);
+    }
+    if (taken == 0) {
+        std.debug.print("doot: --seek-sweep: nothing to seek in\n", .{});
+        return;
+    }
+
+    const s = samples[0..taken];
+    std.mem.sort(u64, s, {}, std.sort.asc(u64));
+    const us = struct {
+        fn f(ns: u64) f64 {
+            return @as(f64, @floatFromInt(ns)) / 1e6;
+        }
+    }.f;
+    std.debug.print(
+        "seek-sweep: {d} seeks over {d} events, {d:.1} ms median, {d:.1} ms p95, " ++
+            "{d:.1} ms worst, {d:.1} ms best; {d} events replayed on average, {d} worst\n",
+        .{
+            taken,
+            app.seek.events.items.len,
+            us(s[taken / 2]),
+            us(s[(taken * 95) / 100]),
+            us(s[taken - 1]),
+            us(s[0]),
+            replayed / taken,
+            worst_replayed,
+        },
+    );
+}
+
+/// The status row's contents, with `--seek-status` applied.
+///
+/// One place, because the row is composed at three call sites and a pinned
+/// clock that reached two of them would produce a capture whose bar and
+/// clock disagreed about which frame it was.
+fn seekStatus(app: *App, opts: cli.Options) seek.Status {
+    var st = app.seek.status();
+    if (opts.seek_status) |fixed| {
+        st.wall_s = fixed.wall_s;
+        st.behind_s = fixed.behind_s;
+        st.frac = @as(f64, @floatFromInt(fixed.percent)) / 100.0;
+    }
+    return st;
+}
+
+/// A thread that does nothing but parse, so the claim L0's record makes --
+/// that an extra busy thread makes the main thread likelier to be descheduled
+/// while it holds the terminal mutex -- can be measured rather than assumed.
+///
+/// It is deliberately *worse* than the seek worker it stands in for: the
+/// worker reads a file and replays a session once, in a few hundred
+/// milliseconds; this never stops. A `lock` column that does not move under
+/// this will not move under the worker. See `--busy-threads`.
+fn busyThread(app: *App) void {
+    const alloc = std.heap.page_allocator;
+    var term = Terminal.init(alloc, 80, 24) catch return;
+    defer term.deinit();
+    var parser: vt.Parser = .{};
+
+    // Colour, wrapping and line feeds, so this exercises the parser rather
+    // than a memcpy.
+    var buf: [8192]u8 = undefined;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (n + 64 < buf.len) : (i += 1) {
+        const s = std.fmt.bufPrint(
+            buf[n..],
+            "\x1b[{d}m{d:0>5} the quick brown fox jumps over the lazy dog\r\n",
+            .{ 30 + (i % 8), i },
+        ) catch break;
+        n += s.len;
+    }
+
+    while (app.running.load(.acquire)) {
+        parser.feed(&term, buf[0..n]);
+        term.replies.clearRetainingCapacity();
+    }
+}
 
 fn readerThread(app: *App) void {
     // Poll with a timeout rather than blocking in read(). A blocking read
@@ -215,14 +592,38 @@ pub fn main(init: std.process.Init.Minimal) !void {
         // recorder owns nothing and every method on it is a no-op, so
         // `--no-record` and `--incognito` need no branch at any call site.
         .rec = rec.Writer.disabled(alloc),
+        .seek = .{ .alloc = alloc },
         .term = try Terminal.init(alloc, size.cols, size.rows),
         .pty = try Pty.open(@intCast(size.cols), @intCast(size.rows), opts.shell),
     };
     defer app.mutex.deinit();
     defer app.rec_mutex.deinit();
     defer app.rec.deinit();
+    defer app.seek.deinit();
     defer app.term.deinit();
     defer app.pty.deinit();
+    // A seek worker still in flight at exit is joined before anything it
+    // points at is freed. It takes no lock, so it cannot be waiting on us.
+    defer if (app.seek_thread) |t| {
+        t.join();
+        if (app.seek_build) |b| {
+            b.deinit();
+            alloc.destroy(b);
+        }
+    };
+
+    // `--no-record` and `--incognito`: there is no log, so the seek keys have
+    // nothing to open. The *mode* is not set here -- the status row must not
+    // appear until somebody asks to seek -- only what it will say when they
+    // do. `seekPath` returns null without touching a descriptor when the
+    // recorder is disabled, which is what makes "the seek path opens no file"
+    // a testable claim rather than a hopeful one.
+    if (!opts.record) {
+        app.seek.reason = if (opts.incognito)
+            "this window is incognito -- nothing is recorded"
+        else
+            "this session is not being recorded";
+    }
 
     // Recording is on by default, and visible: the window title says so for
     // as long as it is happening. See docs/roadmap/record.md.
@@ -259,6 +660,15 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     app.wake_event = c.SDL_RegisterEvents(1);
     _ = c.SDL_StartTextInput(renderer.window);
+
+    // The L1 lock experiment. Zero unless asked for, so the ordinary run is
+    // one branch at startup and nothing else.
+    var busy: [cli.max_busy_threads]std.Thread = undefined;
+    var busy_n: usize = 0;
+    while (busy_n < opts.busy_threads) : (busy_n += 1) {
+        busy[busy_n] = std.Thread.spawn(.{}, busyThread, .{&app}) catch break;
+    }
+    defer for (busy[0..busy_n]) |t| t.join();
 
     const reader = try std.Thread.spawn(.{}, readerThread, .{&app});
     var reader_joined = false;
@@ -336,7 +746,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
                     redraw = true;
                 },
                 c.SDL_EVENT_KEY_DOWN => {
-                    if (try handleKey(&app, &renderer, &font_size, alloc, ev.key)) {
+                    if (try handleKey(&app, &renderer, &font_size, alloc, ev.key, opts.frame_stats)) {
                         resized = true;
                     }
                     redraw = true;
@@ -394,21 +804,44 @@ pub fn main(init: std.process.Init.Minimal) !void {
             redraw = true;
         }
 
+        // The seek worker wakes the main thread when it finishes, so this
+        // costs one branch per iteration and never blocks.
+        if (pollSeekBuild(&app, alloc, opts.frame_stats)) redraw = true;
+
         // Read before the terminal mutex is taken, never inside it: the
         // lock order is terminal then recorder, so a read of the recorder's
         // state has to happen outside or not at all.
         const record_state = recordState(&app, opts);
 
+        // The window is showing history (or is about to). The live terminal
+        // is still being fed by the reader thread the whole time.
+        const showing_view = app.seek.mode == .seeking and app.seek.view != null;
+        const status = app.seek.mode != .live;
+        var marker_buf: [32]u8 = undefined;
+        const seek_marker: ?[]const u8 = if (app.seek.mode == .seeking)
+            seek.titleMarker(&marker_buf, app.seek.behindSeconds())
+        else
+            null;
+
         // Anything the terminal wants to tell the child (cursor reports,
-        // device attributes) goes back down the PTY here.
+        // device attributes) goes back down the PTY here. **Also while
+        // seeking**: those are the emulator answering the child, the child is
+        // still running, and a program waiting on a CPR that never arrives
+        // hangs for as long as the window is looking at history.
         app.mutex.lock();
         const t_lock = stats.nowNs();
         if (app.term.replies.items.len > 0) {
             app.pty.writeAll(app.term.replies.items) catch {};
             app.term.replies.clearRetainingCapacity();
         }
-        const dirty = app.term.dirty or redraw;
-        app.term.dirty = false;
+        // Consumed every frame, seeking or not, and *remembered*. Left set,
+        // it would pile up; consumed and forgotten, the live screen would
+        // come back blank on the way out of seek mode and stay that way until
+        // the child next printed something.
+        if (app.term.dirty) {
+            app.term.dirty = false;
+            app.live_dirty = true;
+        }
 
         // The composition is a pure function in cli.zig, tested without a
         // window. It happens here because it reads `term.title`, which the
@@ -420,6 +853,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
             title_buf[0 .. title_buf.len - 1],
             app.term.title.items,
             record_state,
+            seek_marker,
         );
         var title_changed = false;
         if (composed.len != last_title_len or
@@ -437,22 +871,39 @@ pub fn main(init: std.process.Init.Minimal) !void {
         // `--select`, re-applied every frame so it survives the shell's
         // output arriving underneath it. Under the lock, immediately before
         // the snapshot that photographs it.
-        if (opts.select) |spec| applySelect(&app.term, spec, opts.select_rect);
-
         var draw_frame = false;
-        if (dirty) {
-            draw_frame = true;
-            renderer.snapshot(&app.term) catch {
-                draw_frame = false;
-                // `dirty` was consumed above. Dropping it here would lose
-                // this content until some later event happened to set it
-                // again -- on an idle terminal, the child's last line would
-                // stay invisible until the user typed. Still under the lock.
-                app.term.dirty = true;
-            };
+        if (!showing_view) {
+            if (opts.select) |spec| applySelect(&app.term, spec, opts.select_rect);
+            if (app.live_dirty or redraw) {
+                app.live_dirty = false;
+                draw_frame = true;
+                renderer.snapshot(&app.term) catch {
+                    draw_frame = false;
+                    // Dropping this would lose the content until some later
+                    // event happened to set it again -- on an idle terminal,
+                    // the child's last line would stay invisible until the
+                    // user typed.
+                    app.live_dirty = true;
+                };
+            }
         }
         app.mutex.unlock();
         const lock_ns = stats.nowNs() - t_lock;
+
+        // The view terminal is the main thread's outright, so it is
+        // photographed **outside** the lock. Sprint 1's rule is that the
+        // critical section holds one memcpy of the live grid and nothing
+        // else; a seek must not add a second one to it.
+        if (showing_view) {
+            renderer.snapshot(&app.seek.view.?) catch {
+                draw_frame = false;
+            };
+            draw_frame = true;
+        }
+        if (status and draw_frame) {
+            var text_buf: [512]u8 = undefined;
+            renderer.setStatus(seek.statusText(&text_buf, seekStatus(&app, opts)));
+        }
 
         if (title_changed) renderer.setTitle(title_buf[0..last_title_len :0]);
 
@@ -506,10 +957,32 @@ pub fn main(init: std.process.Init.Minimal) !void {
     // timer, so the last frame is captured on the way out instead. The
     // gallery depends on this: its scenes are a few lines of printf and
     // are gone in milliseconds.
+    // `--seek` / `--seek-span`: photograph a moment in this session's own
+    // recording rather than its last frame.
+    //
+    // Synchronous, and only here: the child is gone, the reader is joined and
+    // the recorder is closed, so nothing is racing and the worker thread
+    // would buy nothing. It exists so the gallery can carry a seeked frame --
+    // the arbiter for anything visible is a picture, and a feature no picture
+    // can show is a feature nothing is watching.
+    if (opts.seek != null or opts.seek_span != null) {
+        captureSeek(&app, alloc, opts);
+    }
+
     if (renderer.screenshot_path != null) {
         renderer.screenshot_after_ns = 0;
-        if (opts.select) |spec| applySelect(&app.term, spec, opts.select_rect);
-        renderer.snapshot(&app.term) catch {};
+        if (app.seek.mode != .live and app.seek.view != null) {
+            renderer.snapshot(&app.seek.view.?) catch {};
+            var text_buf: [512]u8 = undefined;
+            renderer.setStatus(seek.statusText(&text_buf, seekStatus(&app, opts)));
+        } else {
+            if (opts.select) |spec| applySelect(&app.term, spec, opts.select_rect);
+            renderer.snapshot(&app.term) catch {};
+            if (app.seek.mode != .live) {
+                var text_buf: [512]u8 = undefined;
+                renderer.setStatus(seek.statusText(&text_buf, seekStatus(&app, opts)));
+            }
+        }
         _ = renderer.draw();
     }
 
@@ -545,6 +1018,13 @@ fn stdout(comptime fmt: []const u8, args: anytype) void {
 /// record that is in the file.
 fn sendToPty(app: *App, bytes: []const u8) void {
     if (bytes.len == 0) return;
+    // A printable key exits seek mode and is then delivered, mirroring the
+    // view snap-back below: you scroll back to read, then type, and you are
+    // back. Keystrokes must never reach the child *while* the window is
+    // showing history -- a `q` meant for a status row would be a `q` typed
+    // into whatever is running now.
+    exitSeek(app);
+
     app.rec_mutex.lock();
     app.rec.input(bytes, stats.nowNs());
     app.rec_mutex.unlock();
@@ -564,6 +1044,7 @@ fn handleKey(
     font_size: *u32,
     alloc: std.mem.Allocator,
     key: c.SDL_KeyboardEvent,
+    report: bool,
 ) !bool {
     const mods = key.mod;
     const cmd = mods & c.SDL_KMOD_GUI != 0;
@@ -634,8 +1115,29 @@ fn handleKey(
             c.SDLK_R, 'R' => {
                 if (shift) toggleInputRecording(app);
             },
+            // L1: the window looks into the session's own recording.
+            //
+            // `Cmd ⇧ ↑` is the sprint's whole claim in one key -- the last
+            // frame of the most recently closed full-screen program, which
+            // every other terminal throws away the instant it exits.
+            c.SDLK_UP => if (shift) seekAction(app, alloc, .prev_span, report),
+            c.SDLK_DOWN => if (shift) seekAction(app, alloc, .next_span, report),
+            c.SDLK_LEFT => if (shift) seekAction(app, alloc, .{
+                .step = -(if (alt) seek.big_step_s else seek.step_s),
+            }, report),
+            c.SDLK_RIGHT => if (shift) seekAction(app, alloc, .{
+                .step = if (alt) seek.big_step_s else seek.step_s,
+            }, report),
             else => {},
         }
+        return false;
+    }
+
+    // Esc leaves seek mode rather than reaching the child. It is the only
+    // key that means "back to live" and nothing else, and while the window
+    // is showing history the child has no business hearing it.
+    if (key.key == c.SDLK_ESCAPE and app.seek.mode != .live) {
+        exitSeek(app);
         return false;
     }
 
@@ -843,6 +1345,12 @@ fn applySelect(term: *Terminal, spec: cli.Select, rect: bool) void {
 fn handleWheel(app: *App, wheel: c.SDL_MouseWheelEvent) void {
     const lines: isize = @intFromFloat(@trunc(wheel.y * 3));
     if (lines == 0) return;
+    // Inert while the window is showing history. Scrolling the *live*
+    // terminal's viewport under a historical frame would move something the
+    // user cannot see, and translating the wheel into arrow keys for the
+    // child would be sending it input from a screen it is not showing.
+    // Scrolling the seeked view's own history is E7's job, not this sprint's.
+    if (app.seek.mode != .live) return;
 
     app.mutex.lock();
     const on_alt = app.term.on_alt;

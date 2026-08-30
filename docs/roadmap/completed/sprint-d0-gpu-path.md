@@ -2,7 +2,7 @@
 
 **Done, in two commits.** The renderer is ours, and it blends in linear light.
 
-[D0](../dependencies.md#d0--own-the-gpu-path-one-to-two-weeks--done) was always two
+[D0](../dependencies.md#d0--own-the-gpu-path-one-to-two-weeks) was always two
 commits: one that replaces SDL's 2D renderer with Metal and is *pixel-identical*
 to what it replaced, and one that flips the drawable to `BGRA8Unorm_sRGB` and
 makes the hardware blend in linear light. Doing them together would have meant
@@ -219,7 +219,7 @@ to "no SDL *drawing* call", since D0 runs behind SDL's window by construction.
   memory -- CI's `macos-15` paravirtual device included, while `macos-14`
   has no device and never constructs a `Renderer`. So
   it would be code no test could reach. `gpu_create` fails by name instead.
-  Revisit only if [D5](../dependencies.md#d5--one-binary-one-week) adds an x86_64 row.
+  Revisit only if [D5](../dependencies.md#d5--one-binary) adds an x86_64 row.
 - **Do not declare the MSL vertex struct with vector types.** Scalars only.
   The repack is silent.
 - **Headlessness is `SDL_Metal_CreateView` returning null**, and nothing else.

@@ -94,6 +94,60 @@ pub const Options = struct {
     /// Days to keep a recording. 0 keeps them forever.
     record_retain_days: u32 = default_retain_days,
 
+    // -- seeking --------------------------------------------------------
+
+    /// `--seek N`: before the screenshot, seek to N seconds into the
+    /// session's own recording. It exists for the same reason `--select`
+    /// does: there is no other way to get a seeked frame into a headless
+    /// capture, and a feature the gallery cannot photograph is a feature
+    /// nothing is watching.
+    seek: ?f64 = null,
+    /// `--seek-span N`: seek to the last frame of the Nth alternate-screen
+    /// span, counting from the end. 1 is the most recent, which is what
+    /// `Cmd ⇧ ↑` does.
+    seek_span: ?u32 = null,
+
+    /// Hidden, and not in `--help`: `--seek-status <wall_s>,<behind_s>,<pct>`
+    /// composes the status row from fixed times instead of the seek's own.
+    ///
+    /// A gallery capture is compared pixel for pixel against a committed
+    /// PNG, and **every time value in this row is unreproducible**: the clock
+    /// is the real time of day, and the bar and the "behind live" figure are
+    /// fractions of a session whose length is dominated by however long the
+    /// shell took to start -- measured at 5-90 ms of jitter on this machine,
+    /// which is more than a bar cell is wide. A capture that differs on every
+    /// run is how a gallery stops being read.
+    ///
+    /// So the three numbers are pinned and nothing else is. The row is still
+    /// composed by `seek.statusText`, painted by `seek.paintStatus`, and
+    /// drawn as the bottom grid row through the same atlas as every other
+    /// row; the title in it is the child's own at that moment, and the frame
+    /// under it is the real restored checkpoint. Stated here and in the
+    /// sprint record rather than left for the picture to imply.
+    seek_status: ?SeekStatus = null,
+
+    /// Hidden, and not in `--help`: after the index is built, seek to N
+    /// evenly spaced moments in the session and print the distribution of
+    /// what each one cost, end to end.
+    ///
+    /// The gate says "seek p95 ≤ 150 ms". A p95 needs a sample, and a person
+    /// pressing a key ninety-five times is not a measurement. This is the
+    /// instrument that produces it, over a real recording, through the same
+    /// `seekTo` a key press calls. See the L1 sprint record for the numbers.
+    seek_sweep: u32 = 0,
+
+    /// Hidden, and not in `--help`: spawn N threads that do nothing but
+    /// parse in a loop.
+    ///
+    /// L0's record found that an extra busy thread makes the main thread
+    /// likelier to be descheduled while it holds the terminal mutex, which is
+    /// the one thing the `lock` column exists to watch. L1 adds a worker
+    /// thread, so that claim had to be measured rather than assumed -- and
+    /// measuring it needs a way to put a busy thread in this process on
+    /// purpose. It is a measurement instrument, so it is undocumented rather
+    /// than absent: see the L1 sprint record for the numbers it produced.
+    busy_threads: u32 = 0,
+
     /// What the title should say about this session, given the flags. The
     /// runtime state (`Cmd ⇧ R`) can move `record_input` after this.
     pub fn recordState(self: Options) RecordState {
@@ -151,6 +205,39 @@ pub fn parseFontSize(spec: []const u8) ?u32 {
     return std.math.clamp(n, min_font_size, max_font_size);
 }
 
+/// A bound on the measurement instrument, for the reason `--size` has one:
+/// a flag that reaches a resource allocator needs a number it cannot exceed,
+/// however unlikely anybody is to type it.
+pub const max_busy_threads = 16;
+/// And on the seek sweep, for the same reason: it allocates nothing, but a
+/// flag that drives a loop should not be able to ask for four billion of it.
+pub const max_seek_sweep = 10_000;
+
+/// The pinned time values of `--seek-status`. See `Options.seek_status`.
+pub const SeekStatus = struct { wall_s: i64, behind_s: u64, percent: u8 };
+
+/// `<wall_s>,<behind_s>,<percent>`. All three or none: a partially pinned row
+/// would be reproducible in some columns and not others, which is the worst
+/// of both.
+pub fn parseSeekStatus(spec: []const u8) ?SeekStatus {
+    var it = std.mem.splitScalar(u8, spec, ',');
+    const wall = std.fmt.parseInt(i64, it.next() orelse return null, 10) catch return null;
+    const behind = std.fmt.parseInt(u64, it.next() orelse return null, 10) catch return null;
+    const pct = std.fmt.parseInt(u8, it.next() orelse return null, 10) catch return null;
+    if (it.next() != null) return null;
+    if (pct > 100) return null;
+    return .{ .wall_s = wall, .behind_s = behind, .percent = pct };
+}
+
+/// `--seek N`, in seconds. Negative counts back from the end of the session,
+/// which is how "show me the last ten seconds" is spelled without knowing how
+/// long the session was.
+pub fn parseSeconds(spec: []const u8) ?f64 {
+    const n = std.fmt.parseFloat(f64, spec) catch return null;
+    if (std.math.isNan(n) or std.math.isInf(n)) return null;
+    return n;
+}
+
 // ---------------------------------------------------------------------------
 // The recording indicator
 // ---------------------------------------------------------------------------
@@ -186,8 +273,23 @@ pub const RecordState = enum {
 /// long, the base is what gets cut -- the indicator is the part that must not
 /// be lost -- and the cut lands on a UTF-8 boundary, because half a
 /// codepoint in a title bar is a visible mistake.
-pub fn windowTitle(buf: []u8, base: []const u8, state: RecordState) []const u8 {
-    const suffix = switch (state) {
+/// While seeking, the indicator is the *seek marker* rather than `● rec`:
+/// the window is not showing the live session, and saying "rec" over a
+/// historical frame would be describing the wrong thing. The one state that
+/// survives is `● rec+input`, because S6 requires the keystroke indicator to
+/// be visible whenever keystrokes are being recorded, and seeking does not
+/// stop that.
+pub fn windowTitle(
+    buf: []u8,
+    base: []const u8,
+    state: RecordState,
+    seek_marker: ?[]const u8,
+) []const u8 {
+    var suffix_buf: [64]u8 = undefined;
+    const suffix = if (seek_marker) |m| blk: {
+        if (state != .output_and_input) break :blk m;
+        break :blk std.fmt.bufPrint(&suffix_buf, "● rec+input -- {s}", .{m}) catch m;
+    } else switch (state) {
         .off => "",
         .incognito => "incognito",
         .output => "● rec",
@@ -200,7 +302,7 @@ pub fn windowTitle(buf: []u8, base: []const u8, state: RecordState) []const u8 {
         return buf[0..cut];
     }
 
-    const sep = " — ";
+    const sep = " -- ";
     // No child title yet -- a freshly opened window, before the shell has
     // said anything. Leading separator with nothing before it reads as a
     // mistake, so the indicator stands alone.
@@ -264,12 +366,23 @@ pub const help =
     \\  --record-retain-days N delete recordings older than this (default {d},
     \\                         0 keeps them forever)
     \\
+    \\Seeking (the window shows a moment in the session's own recording; the
+    \\live terminal keeps running behind it and the child never notices):
+    \\  --seek N               seek N seconds in before the screenshot;
+    \\                         negative counts back from the end
+    \\  --seek-span N          seek to the last frame of the Nth most recent
+    \\                         full-screen program (1 is the latest)
+    \\
     \\Keys:
     \\  Cmd +/-/0       font size
     \\  Cmd C           copy the selection
     \\  Cmd V           paste
     \\  Cmd K           clear
     \\  Cmd Shift R     start/stop recording keystrokes
+    \\  Cmd Shift Up    the last frame of the previous full-screen program
+    \\  Cmd Shift Down  the next one
+    \\  Cmd Shift Left/Right   step 1 second (10 with Option)
+    \\  Esc             back to live -- as does typing anything printable
     \\  Wheel           scroll history
     \\
     \\Mouse:
@@ -356,6 +469,33 @@ pub fn parseArgs(argv: []const [*:0]const u8) Action {
             if (i >= argv.len) break;
             opts.record_retain_days = std.fmt.parseInt(u32, std.mem.span(argv[i]), 10) catch
                 opts.record_retain_days;
+        } else if (std.mem.eql(u8, arg, "--seek")) {
+            i += 1;
+            if (i >= argv.len) break;
+            opts.seek = parseSeconds(std.mem.span(argv[i])) orelse opts.seek;
+        } else if (std.mem.eql(u8, arg, "--seek-span")) {
+            i += 1;
+            if (i >= argv.len) break;
+            opts.seek_span = std.fmt.parseInt(u32, std.mem.span(argv[i]), 10) catch
+                opts.seek_span;
+        } else if (std.mem.eql(u8, arg, "--seek-status")) {
+            i += 1;
+            if (i >= argv.len) break;
+            opts.seek_status = parseSeekStatus(std.mem.span(argv[i])) orelse opts.seek_status;
+        } else if (std.mem.eql(u8, arg, "--seek-sweep")) {
+            i += 1;
+            if (i >= argv.len) break;
+            opts.seek_sweep = @min(
+                std.fmt.parseInt(u32, std.mem.span(argv[i]), 10) catch 0,
+                max_seek_sweep,
+            );
+        } else if (std.mem.eql(u8, arg, "--busy-threads")) {
+            i += 1;
+            if (i >= argv.len) break;
+            opts.busy_threads = @min(
+                std.fmt.parseInt(u32, std.mem.span(argv[i]), 10) catch 0,
+                max_busy_threads,
+            );
         }
     }
 
@@ -550,18 +690,18 @@ test "asking to record input into a session that is not recorded records nothing
 
 test "the title says what is being recorded, in every state" {
     var buf: [256]u8 = undefined;
-    try testing.expectEqualStrings("zsh", windowTitle(&buf, "zsh", .off));
-    try testing.expectEqualStrings("zsh — incognito", windowTitle(&buf, "zsh", .incognito));
-    try testing.expectEqualStrings("zsh — ● rec", windowTitle(&buf, "zsh", .output));
-    try testing.expectEqualStrings("zsh — ● rec+input", windowTitle(&buf, "zsh", .output_and_input));
+    try testing.expectEqualStrings("zsh", windowTitle(&buf, "zsh", .off, null));
+    try testing.expectEqualStrings("zsh -- incognito", windowTitle(&buf, "zsh", .incognito, null));
+    try testing.expectEqualStrings("zsh -- ● rec", windowTitle(&buf, "zsh", .output, null));
+    try testing.expectEqualStrings("zsh -- ● rec+input", windowTitle(&buf, "zsh", .output_and_input, null));
 }
 
 test "the indicator stands alone before the child has set a title" {
     var buf: [256]u8 = undefined;
-    try testing.expectEqualStrings("", windowTitle(&buf, "", .off));
-    try testing.expectEqualStrings("incognito", windowTitle(&buf, "", .incognito));
-    try testing.expectEqualStrings("● rec", windowTitle(&buf, "", .output));
-    try testing.expectEqualStrings("● rec+input", windowTitle(&buf, "", .output_and_input));
+    try testing.expectEqualStrings("", windowTitle(&buf, "", .off, null));
+    try testing.expectEqualStrings("incognito", windowTitle(&buf, "", .incognito, null));
+    try testing.expectEqualStrings("● rec", windowTitle(&buf, "", .output, null));
+    try testing.expectEqualStrings("● rec+input", windowTitle(&buf, "", .output_and_input, null));
 }
 
 test "a long title is cut, and the indicator is not" {
@@ -569,20 +709,20 @@ test "a long title is cut, and the indicator is not" {
     // the "recording" half to fit a path would be worse than useless.
     var buf: [32]u8 = undefined;
     const long = "a very long child title indeed that goes on";
-    const got = windowTitle(&buf, long, .output);
+    const got = windowTitle(&buf, long, .output, null);
     try testing.expect(got.len <= buf.len);
     try testing.expect(std.mem.endsWith(u8, got, "● rec"));
     try testing.expect(std.mem.startsWith(u8, got, "a very long"));
 
     // And when there is no room for even the separator, the indicator wins.
     var tiny: [7]u8 = undefined; // exactly "● rec": the dot is three bytes
-    try testing.expectEqualStrings("● rec", windowTitle(&tiny, long, .output));
+    try testing.expectEqualStrings("● rec", windowTitle(&tiny, long, .output, null));
     // And smaller still: whatever comes back is valid UTF-8, never half a
     // dot. A title bar showing a replacement glyph reads as our bug.
     var i: usize = 0;
     while (i <= 8) : (i += 1) {
         var tinier: [8]u8 = undefined;
-        const squeezed = windowTitle(tinier[0..i], long, .output);
+        const squeezed = windowTitle(tinier[0..i], long, .output, null);
         try testing.expect(squeezed.len <= i);
         try testing.expect(std.unicode.utf8ValidateSlice(squeezed));
     }
@@ -596,7 +736,7 @@ test "cutting a long title never splits a codepoint" {
     var i: usize = 1;
     while (i <= 64) : (i += 1) {
         var buf: [64]u8 = undefined;
-        const got = windowTitle(buf[0..i], emoji, .output);
+        const got = windowTitle(buf[0..i], emoji, .output, null);
         try testing.expect(got.len <= i);
         try testing.expect(std.unicode.utf8ValidateSlice(got));
     }
@@ -605,7 +745,7 @@ test "cutting a long title never splits a codepoint" {
     i = 1;
     while (i <= 64) : (i += 1) {
         var buf: [64]u8 = undefined;
-        const got = windowTitle(buf[0..i], emoji, .off);
+        const got = windowTitle(buf[0..i], emoji, .off, null);
         try testing.expect(std.unicode.utf8ValidateSlice(got));
     }
 }
@@ -652,4 +792,60 @@ test "the selection flags parse, and default off" {
     const opts = parseArgs(&argv).run;
     try testing.expect(opts.copy_on_select);
     try testing.expectEqual(@as(u32, 4), opts.select.?.c1);
+}
+
+test "the seek flags parse, and default off" {
+    const bare = parseArgs(&[_][*:0]const u8{"doot"}).run;
+    try testing.expectEqual(@as(?f64, null), bare.seek);
+    try testing.expectEqual(@as(?u32, null), bare.seek_span);
+    try testing.expectEqual(@as(?SeekStatus, null), bare.seek_status);
+    try testing.expectEqual(@as(u32, 0), bare.busy_threads);
+
+    const argv = [_][*:0]const u8{ "doot", "--seek", "-12.5", "--seek-span", "2" };
+    const opts = parseArgs(&argv).run;
+    // Negative counts back from the end, which is how "the last twelve
+    // seconds" is spelled without knowing how long the session was.
+    try testing.expectEqual(@as(f64, -12.5), opts.seek.?);
+    try testing.expectEqual(@as(u32, 2), opts.seek_span.?);
+
+    // A number that cannot be a position in time is declined rather than
+    // turned into a seek to somewhere arbitrary.
+    for ([_][]const u8{ "nan", "inf", "-inf", "later", "" }) |spec| {
+        try testing.expectEqual(@as(?f64, null), parseSeconds(spec));
+    }
+    try testing.expectEqual(@as(f64, 0), parseSeconds("0").?);
+}
+
+test "the pinned status row takes all three values or none" {
+    const ok = parseSeekStatus("43391,272,42").?;
+    try testing.expectEqual(@as(i64, 43391), ok.wall_s);
+    try testing.expectEqual(@as(u64, 272), ok.behind_s);
+    try testing.expectEqual(@as(u8, 42), ok.percent);
+
+    // Partly pinned would be reproducible in some columns of the capture and
+    // not others, which is worse than either. So: all three or nothing.
+    for ([_][]const u8{
+        "43391",
+        "43391,272",
+        "43391,272,42,1",
+        "43391,272,101",
+        "43391,272,x",
+        ",,",
+        "",
+    }) |spec| {
+        try testing.expectEqual(@as(?SeekStatus, null), parseSeekStatus(spec));
+    }
+
+    const argv = [_][*:0]const u8{ "doot", "--seek-status", "1,2,3" };
+    const opts = parseArgs(&argv).run;
+    try testing.expectEqual(@as(u8, 3), opts.seek_status.?.percent);
+}
+
+test "the busy-thread instrument is bounded" {
+    // It reaches a resource allocator, so it needs a number it cannot
+    // exceed -- the same reason `--size` has one.
+    const many = [_][*:0]const u8{ "doot", "--busy-threads", "100000" };
+    try testing.expectEqual(max_busy_threads, parseArgs(&many).run.busy_threads);
+    const junk = [_][*:0]const u8{ "doot", "--busy-threads", "lots" };
+    try testing.expectEqual(@as(u32, 0), parseArgs(&junk).run.busy_threads);
 }

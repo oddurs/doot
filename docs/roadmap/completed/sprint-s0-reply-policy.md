@@ -71,8 +71,8 @@ The six tests, one per row that has a status today:
 - screen-reading queries are never answered (DECRQCRA, DECRQSS, XTGETTCAP)
 - the clipboard is never read back to the child by default (OSC 52 `?`)
 - the replies that are allowed carry nothing from the screen — prints a
-  marker, asks DA1, DSR 5, CPR and DECXCPR, asserts the exact strings and
-  that the marker is absent
+  marker, asks DA1, DSR 5 and CPR, asserts the exact strings and that the
+  marker is absent
 
 ## What changed about the plan
 

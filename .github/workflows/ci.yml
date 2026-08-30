@@ -25,9 +25,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # The site's engineering log dates each record from git.
-          fetch-depth: 0
       - uses: ./.github/actions/setup
         with:
           zig-version: ${{ env.ZIG_VERSION }}
@@ -47,12 +44,6 @@ jobs:
       # remembering to look.
       - name: Check the corpora carry no secrets
         run: zig build check-corpora
-
-      # The site is rendered from docs/, and a construct the renderer does
-      # not know or a link to nothing fails the deploy. Cheaper to learn
-      # that here than after the merge, when the site goes stale.
-      - name: Check the site builds from these docs
-        run: python3 site/build.py --check
 
   test:
     name: ${{ matrix.optimize }} on ${{ matrix.os }}

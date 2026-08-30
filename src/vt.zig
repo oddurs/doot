@@ -53,6 +53,18 @@ pub const Parser = struct {
     utf8_cp: u21 = 0,
     utf8_need: u3 = 0,
 
+    /// Is the machine between sequences, with no partial UTF-8 carried?
+    ///
+    /// A checkpoint ([ckpt.zig](ckpt.zig)) serialises the *terminal*, not the
+    /// parser, and a seek replays forward from one with a **fresh** parser. So
+    /// a checkpoint may only be taken at a boundary where this is true: taken
+    /// halfway through `ESC [ ? 1 0 4` the replay would meet `9 l` with an
+    /// empty state machine and print it as text. The index builder asks before
+    /// every checkpoint; nothing else needs to.
+    pub fn atGround(self: *const Parser) bool {
+        return self.state == .ground and self.utf8_need == 0;
+    }
+
     /// Drive the state machine over `bytes`.
     ///
     /// In the ground state a run of printable ASCII is handed to the handler

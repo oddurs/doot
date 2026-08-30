@@ -37,6 +37,12 @@ const Capture = struct {
     /// `--select-rect`: the same spec read as a rectangle, the way an
     /// `Option`-drag sets it.
     select_rect: bool = false,
+    /// L1. `--seek-span N` photographs the last frame of the Nth most recent
+    /// full-screen program in *this session's own recording* -- the frame the
+    /// live screen no longer has. It is the one capture here that needs the
+    /// session recorded, so it gets `--record-dir` where every other capture
+    /// gets `--no-record`.
+    seek_span: ?u32 = null,
 };
 
 /// One row per committed PNG. Sizes are chosen so a capture is a few tens
@@ -121,10 +127,36 @@ const captures = [_]Capture{
         .select = "1,7,3,10",
         .select_rect = true,
     },
+
+    // L1. The only capture whose subject is not on the screen: a full-screen
+    // program takes the alt screen, draws, and exits, and this photographs
+    // the frame it drew -- restored from a checkpoint in the session's own
+    // recording, with the seek status row painted as the bottom grid row
+    // underneath it. Every other terminal has thrown that frame away by the
+    // time the shell prints its next line.
+    //
+    // The three time values in the status row are pinned by `--seek-status`.
+    // See `cli.Options.seek_status`: the clock is the real time of day and
+    // the bar is a fraction of a session whose length is dominated by shell
+    // startup jitter, so none of the three can be reproduced. Everything else
+    // -- the row's text, its reverse video, its place in the grid, and the
+    // restored frame above it -- is real.
+    .{
+        .name = "seek-span-14pt-1x",
+        .scene = "seek",
+        .cols = 60,
+        .rows = 14,
+        .font_size = 14,
+        .scale = 1,
+        .seek_span = 1,
+    },
 };
 
 const expected_dir = "bench/gallery/expected";
 const current_dir = "bench/gallery/current";
+/// Where the one recorded capture's `.trec` goes. Under the gitignored
+/// render directory, never the user's own sessions folder.
+const sessions_dir = "bench/gallery/current/sessions";
 
 fn compare(a: png.Image, b: png.Image) struct { pixels: u64, worst: u8 } {
     var differing: u64 = 0;
@@ -210,15 +242,38 @@ pub fn main(init: std.process.Init.Minimal) !void {
         var argv_list: std.ArrayList([]const u8) = .empty;
         defer argv_list.deinit(gpa);
         try argv_list.appendSlice(gpa, &.{
-            doot,          "--shell",     scene_path, "--size", size,
-            "--font-size", font_size,     "--scale",  scale,    "--screenshot",
+            doot,          "--shell", scene_path, "--size", size,
+            "--font-size", font_size, "--scale",  scale,    "--screenshot",
             out_path,
+        });
+        // Outside the branch below on purpose: a `defer gpa.free` inside it
+        // would run at the end of the block, freeing the string while
+        // `argv_list` still points at it, and the child would be spawned
+        // with a freed argument. That is exactly what happened the first
+        // time, and it read as "the seek silently did nothing".
+        var span_buf: [8]u8 = undefined;
+        if (cap.seek_span) |n| {
+            // The one capture that has to be recorded, because what it
+            // photographs is a frame out of the recording. Its own
+            // directory, under the gitignored render directory rather than
+            // the user's sessions folder, and swept after a day so repeated
+            // runs do not pile up.
+            const span = try std.fmt.bufPrint(&span_buf, "{d}", .{n});
+            try argv_list.appendSlice(gpa, &.{
+                "--record-dir",         sessions_dir,
+                "--record-retain-days", "1",
+                "--seek-span",          span,
+                // See `cli.Options.seek_status`: pinned so the capture is
+                // reproducible, and pinned nowhere else.
+                "--seek-status",        "43391,272,42",
+            });
+        } else {
             // A gallery capture is a test, not a session. Without this
             // every `zig build gallery` drops recordings into the user's
             // own sessions directory, which is exactly the kind of thing
             // an on-by-default recorder has to not do.
-                 "--no-record",
-        });
+            try argv_list.append(gpa, "--no-record");
+        }
         if (cap.select) |spec| try argv_list.appendSlice(gpa, &.{ "--select", spec });
         if (cap.select_rect) try argv_list.append(gpa, "--select-rect");
 

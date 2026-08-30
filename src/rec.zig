@@ -779,6 +779,24 @@ pub const Writer = struct {
         self.emitOutOfBand(.control, &[_]u8{@intFromEnum(what)}, now_ns);
     }
 
+    /// Push everything held or buffered to the file, now.
+    ///
+    /// L1 calls this once on entering seek mode, on the main thread, under the
+    /// recorder mutex and **never** under the terminal mutex. Without it the
+    /// log stops a held read and a flush interval short of the present, and
+    /// "seek to now == the live screen" -- the one identity a seek has to have
+    /// -- would be false by up to 250 ms of output.
+    ///
+    /// It can cost a whole 64 KiB `write(2)`: 1,002-2,760 µs on the machine
+    /// L0 measured. That is a real main-thread stall, it happens once per
+    /// entry into seek mode rather than per frame, and it is outside the
+    /// critical section the `lock` column measures. Stated rather than hidden.
+    pub fn flushForSeek(self: *Writer, now_ns: u64) void {
+        if (!self.recording) return;
+        self.drainHold();
+        self.flushNow(now_ns);
+    }
+
     /// Called at the top of the reader loop, where `waitReadable` already
     /// returns every 100 ms when the pty is quiet. Costs one comparison per
     /// wake-up and needs no timer of its own.
@@ -1058,6 +1076,12 @@ pub const Session = struct {
     /// close the file -- a crash, a kill, a full disk.
     closed_cleanly: bool = false,
     end_reason: ?EndReason = null,
+    /// The byte offset one past the last record read, and the timestamp it
+    /// left off at. A live file grows while the window is open, and L1 reads
+    /// the tail with `parseFrom` rather than parsing the whole thing again
+    /// every time the user seeks.
+    next_offset: u64 = 0,
+    last_at_us: u64 = 0,
 
     pub fn deinit(self: *Session, alloc: std.mem.Allocator) void {
         alloc.free(self.events);
@@ -1081,22 +1105,44 @@ pub const Session = struct {
     }
 };
 
-/// Take a `.trec` apart. `bytes` must outlive the returned `Session`, whose
-/// payloads point into it.
-pub fn parse(alloc: std.mem.Allocator, bytes: []const u8) !Session {
-    const header = try Header.decode(bytes);
+/// Records only, from `start`. What `parse` uses, and what L1 uses to extend a
+/// session it has already read.
+///
+/// The caller says where the record stream begins and what the clock had
+/// reached there -- `Session.next_offset` and `Session.last_at_us` from the
+/// previous read, or `header_len` and 0 for a fresh file. Getting `at_us_base`
+/// wrong makes every timestamp in the tail wrong, which is why it is a
+/// parameter rather than something guessed from the bytes.
+///
+/// Payloads point into `bytes`, which must outlive the events. Extending a
+/// session therefore appends events pointing into a *second* buffer, and both
+/// have to be kept: nothing here copies a payload.
+pub const Tail = struct {
+    events: []Event,
+    next_offset: u64,
+    last_at_us: u64,
+    truncated_at: ?u64 = null,
+    closed_cleanly: bool = false,
+    end_reason: ?EndReason = null,
+};
 
+pub fn parseFrom(
+    alloc: std.mem.Allocator,
+    bytes: []const u8,
+    start: usize,
+    at_us_base: u64,
+) !Tail {
     var events: std.ArrayList(Event) = .empty;
     errdefer events.deinit(alloc);
 
-    var session = Session{ .header = header, .events = &.{} };
-    var off: usize = header_len;
-    var at_us: u64 = 0;
+    var out = Tail{ .events = &.{}, .next_offset = start, .last_at_us = at_us_base };
+    var off: usize = start;
+    var at_us: u64 = at_us_base;
 
     while (off < bytes.len) {
         // Fewer than eight bytes left is a torn header, not a short record.
         if (bytes.len - off < record_header_len) {
-            session.truncated_at = off;
+            out.truncated_at = off;
             break;
         }
         const kind: Type = @enumFromInt(bytes[off]);
@@ -1105,7 +1151,7 @@ pub fn parse(alloc: std.mem.Allocator, bytes: []const u8) !Session {
         const dt = std.mem.readInt(u32, bytes[off + 4 ..][0..4], .little);
         const body = off + record_header_len;
         if (body + len > bytes.len) {
-            session.truncated_at = off;
+            out.truncated_at = off;
             break;
         }
 
@@ -1117,19 +1163,37 @@ pub fn parse(alloc: std.mem.Allocator, bytes: []const u8) !Session {
             .payload = bytes[body..][0..len],
         });
         off = body + len;
+        out.next_offset = off;
 
         if (kind == .end) {
-            session.closed_cleanly = true;
-            if (len >= 1) session.end_reason = @enumFromInt(bytes[body]);
+            out.closed_cleanly = true;
+            if (len >= 1) out.end_reason = @enumFromInt(bytes[body]);
             // Nothing follows an end record. If something does, this file is
             // two recordings in a trench coat and the rest is not ours.
-            if (off < bytes.len) session.truncated_at = off;
+            if (off < bytes.len) out.truncated_at = off;
             break;
         }
     }
 
-    session.events = try events.toOwnedSlice(alloc);
-    return session;
+    out.last_at_us = at_us;
+    out.events = try events.toOwnedSlice(alloc);
+    return out;
+}
+
+/// Take a `.trec` apart. `bytes` must outlive the returned `Session`, whose
+/// payloads point into it.
+pub fn parse(alloc: std.mem.Allocator, bytes: []const u8) !Session {
+    const header = try Header.decode(bytes);
+    const tail = try parseFrom(alloc, bytes, header_len, 0);
+    return .{
+        .header = header,
+        .events = tail.events,
+        .truncated_at = tail.truncated_at,
+        .closed_cleanly = tail.closed_cleanly,
+        .end_reason = tail.end_reason,
+        .next_offset = tail.next_offset,
+        .last_at_us = tail.last_at_us,
+    };
 }
 
 /// Read a whole `.trec` into memory. The caller frees the slice.

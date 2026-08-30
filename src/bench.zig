@@ -34,6 +34,7 @@ const vt = @import("vt.zig");
 const grid = @import("grid.zig");
 const redact = @import("redact.zig");
 const check = @import("check.zig");
+const ckpt = @import("ckpt.zig");
 const Terminal = @import("terminal.zig").Terminal;
 
 /// A 60 Hz frame. Used only to express throughput in units a terminal
@@ -220,7 +221,10 @@ pub fn main() !void {
     );
     try out.print("  {s:-<11} {s:->10} {s:->10} {s:->12} {s:->10}  {s:-<40}\n", .{ "", "", "", "", "", "" });
 
-    for (corpora) |corpus| {
+    // Kept so the 200x60 table below can say what widening cost.
+    var narrow_mib: [corpora.len]f64 = @splat(0);
+
+    for (corpora, 0..) |corpus, ci| {
         // Aim at roughly 16 MiB of work per repetition so a repetition is
         // long enough to swamp clock granularity.
         const passes = @max(1, (16 * 1024 * 1024) / corpus.bytes.len);
@@ -237,10 +241,54 @@ pub fn main() !void {
         const m = median(&samples);
         const ns_per_byte = @as(f64, @floatFromInt(b)) / @as(f64, @floatFromInt(total));
         const kib_per_frame = mibPerSec(total, b) * 1024.0 * (@as(f64, @floatFromInt(frame_ns)) / 1e9);
+        narrow_mib[ci] = mibPerSec(total, b);
 
         try out.print(
             "  {s:<11} {d:>10.1} {d:>10.1} {d:>12.2} {d:>10.0}  {s}\n",
             .{ corpus.name, mibPerSec(total, b), mibPerSec(total, m), ns_per_byte, kib_per_frame, corpus.what },
+        );
+    }
+
+    // -- parse at 200x60 -----------------------------------------------
+    //
+    // A second table rather than a second column, so every number in
+    // bench/baseline.txt keeps meaning what it meant.
+    //
+    // Why it exists: **every budget on the record roadmap is stated at
+    // 200x60 and nothing measured parse there.** L1 has to materialize a
+    // screen in under 50 ms at that geometry, and the checkpoint spacing is
+    // derived from the rate -- so deriving it from the 80x24 number would be
+    // deriving it from the wrong one. Width scales every `clearRows` fill and
+    // every region-scroll memcpy; height decides how often they happen.
+
+    try out.print("\nparse: the same corpora at 200x60, the geometry the record budgets are stated at\n\n", .{});
+    try out.print(
+        "  {s:<11} {s:>10} {s:>10} {s:>12} {s:>12}  {s}\n",
+        .{ "corpus", "MiB/s", "median", "vs 80x24", "1 MiB in ms", "what it is" },
+    );
+    try out.print("  {s:-<11} {s:->10} {s:->10} {s:->12} {s:->12}  {s:-<40}\n", .{ "", "", "", "", "", "" });
+
+    for (corpora, 0..) |corpus, ci| {
+        const passes = @max(1, (16 * 1024 * 1024) / corpus.bytes.len);
+        const total = corpus.bytes.len * passes;
+
+        var samples: [reps]u64 = undefined;
+        for (&samples) |*s| {
+            const r = try timeParse(gpa, corpus.bytes, passes, 200, 60);
+            s.* = r.ns;
+            sink +%= r.sink;
+        }
+
+        const b = best(&samples);
+        const m = median(&samples);
+        const mib = mibPerSec(total, b);
+        // How long one checkpoint interval of output takes to replay: the
+        // number the interval was chosen from.
+        const one_mib_ms = 1000.0 / mib;
+
+        try out.print(
+            "  {s:<11} {d:>10.1} {d:>10.1} {d:>11.2}x {d:>12.1}  {s}\n",
+            .{ corpus.name, mib, mibPerSec(total, m), mib / narrow_mib[ci], one_mib_ms, corpus.what },
         );
     }
 
@@ -395,6 +443,144 @@ pub fn main() !void {
                 mibPerSec(total, m),
                 @as(f64, @floatFromInt(b)) / @as(f64, @floatFromInt(total)),
                 corpus.what,
+            },
+        );
+    }
+
+    // -- checkpoint ----------------------------------------------------
+    //
+    // L1's own budget, measured before L1's design was allowed to rely on
+    // it. A checkpoint is a whole terminal serialised -- two screens, the
+    // scrollback, the modes -- and the sprint plan carried an *estimate* of
+    // ~25 KB at 80x24 and ~780 KB at 200x60 with a full ring, together with
+    // a rule: if a 200x60 full-history checkpoint exceeded about 2 MB or
+    // about 20 ms to encode, the full-scrollback checkpoint was dead and the
+    // design fell back to two tiers. This table is what that rule was
+    // decided against.
+    //
+    // Each corpus is fed once into a fresh terminal at each geometry and the
+    // resulting state is encoded and decoded `ck_reps` times. The `+ring`
+    // rows are the worst case rather than the corpus's: a terminal whose
+    // 10,000-line scrollback has been filled to capacity first.
+
+    try out.print("\ncheckpoint: a whole terminal serialised, the unit of an L1 seek\n\n", .{});
+    try out.print(
+        "  {s:<11} {s:>9} {s:>11} {s:>11} {s:>11} {s:>11}\n",
+        .{ "corpus", "geometry", "bytes", "encode us", "decode us", "sb lines" },
+    );
+    try out.print("  {s:-<11} {s:->9} {s:->11} {s:->11} {s:->11} {s:->11}\n", .{ "", "", "", "", "", "" });
+
+    const ck_reps = 5;
+    const ck_geoms = [_]struct { cols: usize, rows: usize, label: []const u8 }{
+        .{ .cols = 80, .rows = 24, .label = "80x24" },
+        .{ .cols = 200, .rows = 60, .label = "200x60" },
+    };
+
+    for (corpora) |corpus| {
+        for (ck_geoms) |g| {
+            var term = try Terminal.init(gpa, g.cols, g.rows);
+            defer term.deinit();
+            var parser: vt.Parser = .{};
+            parser.feed(&term, corpus.bytes);
+            term.replies.clearRetainingCapacity();
+
+            var enc_samples: [ck_reps]u64 = undefined;
+            var dec_samples: [ck_reps]u64 = undefined;
+            var size: usize = 0;
+            for (0..ck_reps) |i| {
+                const t0 = nowNs();
+                var e = try ckpt.encode(gpa, &term, .{}, false);
+                enc_samples[i] = nowNs() - t0;
+                size = e.bytes();
+
+                var dst = try Terminal.init(gpa, g.cols, g.rows);
+                const t1 = nowNs();
+                _ = try ckpt.decode(gpa, e.head, e.scrollback, &dst);
+                dec_samples[i] = nowNs() - t1;
+                sink +%= check.checksum(&dst);
+                dst.deinit();
+                e.deinit(gpa);
+            }
+
+            try out.print(
+                "  {s:<11} {s:>9} {d:>11} {d:>11.0} {d:>11.0} {d:>11}\n",
+                .{
+                    corpus.name,
+                    g.label,
+                    size,
+                    @as(f64, @floatFromInt(best(&enc_samples))) / 1000.0,
+                    @as(f64, @floatFromInt(best(&dec_samples))) / 1000.0,
+                    term.scrollback.len,
+                },
+            );
+        }
+    }
+
+    // The worst case the design rule was written about: a scrollback filled
+    // to capacity, at both geometries, with content varied enough that the
+    // style table cannot collapse it to nothing.
+    for (ck_geoms) |g| {
+        var term = try Terminal.init(gpa, g.cols, g.rows);
+        defer term.deinit();
+        var parser: vt.Parser = .{};
+        var line: [512]u8 = undefined;
+        var i: usize = 0;
+        while (term.scrollback.len < @import("terminal.zig").scrollback_lines) : (i += 1) {
+            const text = try std.fmt.bufPrint(
+                &line,
+                "\x1b[{d}m{d:0>6} the quick brown fox jumps over the lazy dog {d}\r\n",
+                .{ 30 + (i % 8), i, i * 7 },
+            );
+            parser.feed(&term, text);
+        }
+        term.replies.clearRetainingCapacity();
+
+        var enc_samples: [ck_reps]u64 = undefined;
+        var dec_samples: [ck_reps]u64 = undefined;
+        var size: usize = 0;
+        for (0..ck_reps) |k| {
+            const t0 = nowNs();
+            var e = try ckpt.encode(gpa, &term, .{}, false);
+            enc_samples[k] = nowNs() - t0;
+            size = e.bytes();
+
+            var dst = try Terminal.init(gpa, g.cols, g.rows);
+            const t1 = nowNs();
+            _ = try ckpt.decode(gpa, e.head, e.scrollback, &dst);
+            dec_samples[k] = nowNs() - t1;
+            sink +%= check.checksum(&dst);
+            dst.deinit();
+            e.deinit(gpa);
+        }
+
+        // And the flag the whole agent/TUI case rests on: with the history
+        // unchanged, the encoder writes screens only and the index points at
+        // the previous blob. This is the size of a checkpoint taken while a
+        // full-screen program is running.
+        var reuse = try ckpt.encode(gpa, &term, .{}, true);
+        defer reuse.deinit(gpa);
+
+        var label: [24]u8 = undefined;
+        try out.print(
+            "  {s:<11} {s:>9} {d:>11} {d:>11.0} {d:>11.0} {d:>11}\n",
+            .{
+                "+full ring",
+                g.label,
+                size,
+                @as(f64, @floatFromInt(best(&enc_samples))) / 1000.0,
+                @as(f64, @floatFromInt(best(&dec_samples))) / 1000.0,
+                term.scrollback.len,
+            },
+        );
+        try out.print(
+            "  {s:<11} {s:>9} {d:>11} {s:>11} {s:>11} {s:>11}\n",
+            .{
+                try std.fmt.bufPrint(&label, "+unchanged", .{}),
+                g.label,
+                reuse.bytes(),
+                "-",
+                "-",
+                "reused",
             },
         );
     }

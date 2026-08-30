@@ -20,4 +20,6 @@ test {
     _ = @import("redact.zig");
     _ = @import("rec.zig");
     _ = @import("check.zig");
+    _ = @import("ckpt.zig");
+    _ = @import("seek.zig");
 }
