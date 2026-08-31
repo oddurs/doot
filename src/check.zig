@@ -176,6 +176,10 @@ pub const field_cases = [_]FieldCase{
     .{ .name = "cursor colour", .bytes = case_base ++ "\x1b[38;5;99m" },
     .{ .name = "cursor attributes", .bytes = case_base ++ "\x1b[1m" },
     .{ .name = "saved cursor", .bytes = case_base ++ "\x1b[9;9H\x1b7\x1b[1;1H" },
+    // The case above saves the cursor with SGR at its defaults, so it
+    // exercises the saved *position* only. A codec that dropped the saved
+    // cursor's colour passed the whole suite until this row existed.
+    .{ .name = "a saved cursor colour", .bytes = case_base ++ "\x1b[38;5;99m\x1b[1m\x1b7\x1b[0m" },
     .{ .name = "scroll region", .bytes = case_base ++ "\x1b[2;4r" },
     .{ .name = "wrap mode", .bytes = case_base ++ "\x1b[?7l" },
     .{ .name = "cursor visibility", .bytes = case_base ++ "\x1b[?25l" },

@@ -1179,6 +1179,11 @@ fn handleMouseDown(
     ev: c.SDL_MouseButtonEvent,
 ) void {
     if (ev.button != c.SDL_BUTTON_LEFT) return;
+    // While the window shows a historical frame, a drag would select on the
+    // *live* terminal underneath -- invisible, and then `Cmd C` would copy
+    // text the user cannot see. Same reasoning as `handleWheel`. Selecting
+    // inside a seeked view is E7's, with the wheel.
+    if (app.seek.mode != .live) return;
     // `SDL_MouseButtonEvent` carries no modifier field, so the keyboard has
     // to be asked directly.
     const mods = c.SDL_GetModState();
@@ -1253,6 +1258,7 @@ fn handleMouseMotion(
     ev: c.SDL_MouseMotionEvent,
 ) bool {
     if (!mouse.dragging) return false;
+    if (app.seek.mode != .live) return false;
     const anchor = mouse.anchor orelse return false;
     const px = renderer.toPixels(ev.x, ev.y);
     mouse.px = .{ .x = px.x, .y = px.y };
@@ -1292,6 +1298,7 @@ fn handleMouseUp(
 /// line under a stationary pointer changed when the view did.
 fn autoscrollStep(app: *App, renderer: *render.Renderer, mouse: *Mouse) void {
     const anchor = mouse.anchor orelse return;
+    if (app.seek.mode != .live) return;
     app.mutex.lock();
     defer app.mutex.unlock();
     app.term.scrollView(mouse.autoscroll);

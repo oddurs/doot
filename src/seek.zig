@@ -177,7 +177,14 @@ pub fn runBuild(b: *Build) void {
         return;
     };
     defer b.alloc.free(all);
-    @memset(all[0..b.prior.len], .{ .kind = .tick, .flags = 0, .at_us = 0, .payload = &.{} });
+    // The prior events themselves, not placeholders. An earlier version put
+    // no-op ticks here and used `prior` for its length only, so every
+    // checkpoint taken in the tail encoded the tail applied to a blank
+    // terminal, and every alt-screen span from before the refresh was lost
+    // -- `Cmd ⇧ ↑` could no longer reach a vim that had closed before the
+    // previous build. Code review found it; the refresh test's corpus was
+    // too small to ever take a second checkpoint and see it. It is not now.
+    @memcpy(all[0..b.prior.len], b.prior);
     @memcpy(all[b.prior.len..], b.tail.events);
 
     const session = rec.Session{
@@ -650,6 +657,18 @@ test "a refresh reads only the new bytes and still indexes the whole session" {
 
     var t = rec.nowNs();
     var buf: [64]u8 = undefined;
+    // A full-screen program in the first half, so the index has a span
+    // that a refresh must not lose -- the sprint's headline feature is
+    // reaching exactly this after the child has kept printing.
+    // Three records, not one: a span is `on_alt` flipping *between* events,
+    // so enter, content and exit each need a read boundary of their own,
+    // as they have when a real program draws.
+    t += std.time.ns_per_ms;
+    w.output("\x1b[?1049h", t);
+    t += std.time.ns_per_ms;
+    w.output("IN-THE-EDITOR", t);
+    t += std.time.ns_per_ms;
+    w.output("\x1b[?1049l", t);
     for (0..30) |i| {
         t += std.time.ns_per_ms;
         w.output(try std.fmt.bufPrint(&buf, "FIRST-HALF-{d:0>3}\r\n", .{i}), t);
@@ -658,8 +677,13 @@ test "a refresh reads only the new bytes and still indexes the whole session" {
 
     var st = State{ .alloc = alloc };
     defer st.deinit();
+    // A tiny interval, so the tail gets checkpoints of its own. At the
+    // default 1 MiB this corpus never takes a second one, `before()` always
+    // answers with the empty-terminal entry, and the forward replay over
+    // the real events hides a builder that had thrown the prefix away.
+    const opts = ckpt.Options{ .interval = 256 };
     {
-        var b = Build{ .alloc = alloc, .path = try alloc.dupeZ(u8, path) };
+        var b = Build{ .alloc = alloc, .path = try alloc.dupeZ(u8, path), .opts = opts };
         runBuild(&b);
         defer b.deinit();
         try testing.expectEqual(@as(?anyerror, null), b.failed);
@@ -668,6 +692,8 @@ test "a refresh reads only the new bytes and still indexes the whole session" {
     const first_events = st.events.items.len;
     const first_offset = st.next_offset;
     try testing.expect(first_events > 0);
+    const spans_before = st.index.?.spans.items.len;
+    try testing.expectEqual(@as(usize, 1), spans_before);
 
     for (30..60) |i| {
         t += std.time.ns_per_ms;
@@ -683,6 +709,7 @@ test "a refresh reads only the new bytes and still indexes the whole session" {
             .at_us_base = st.last_at_us,
             .prior = st.events.items,
             .prior_header = st.header,
+            .opts = opts,
         };
         runBuild(&b);
         defer b.deinit();
@@ -692,6 +719,9 @@ test "a refresh reads only the new bytes and still indexes the whole session" {
         try st.absorb(&b);
     }
     try testing.expect(st.events.items.len > first_events);
+    // The span from before the refresh survived it. This is the assertion
+    // that fails when the builder replays placeholders for the prefix.
+    try testing.expectEqual(spans_before, st.index.?.spans.items.len);
 
     // The index covers the whole session, not just the tail: a seek back to
     // the very first event has a checkpoint at or before it.

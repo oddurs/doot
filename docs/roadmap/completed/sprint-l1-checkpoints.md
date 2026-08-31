@@ -392,7 +392,7 @@ whole suite. **Two survived the first pass.**
 | 2 | `used_cols` trimmed via `Cell.isBlank()` instead of exact `Cell.blank` | died — a coloured trailing space |
 | 3 | screen encoded in memory order (`cells[y*cols..]`) instead of `row(y)` | died — a rotated fixture |
 | 4 | `RowMeta.id` dropped | died — the id assertion |
-| 5 | the inactive screen not encoded | died — a checkpoint taken while `on_alt` |
+| 5 | the inactive screen not encoded | died — "both screens are carried, including the parked one", and the shared table's alt-screen case |
 | 6 | scrollback restored newest-first | died |
 | 7 | a partially filled ring restored with `head == 0` | died |
 | 8 | `pending_wrap` dropped from the decode | **survived** — see below |
@@ -402,7 +402,7 @@ whole suite. **Two survived the first pass.**
 | 12 | `Screen.offset` preserved rather than canonicalised to 0 | died — `offset == 0` asserted after decode |
 | 13 | the varint decoder accepts a truncated stream | died — every prefix of a valid checkpoint |
 | 14 | `scrollback_unchanged` set after a push | died |
-| 15 | decimation drops the target checkpoint | died — `nearest()` returns the greatest `pos <= target` |
+| 15 | decimation drops the target checkpoint | died — `Index.before` returns the greatest `event_index <= target` |
 | 16 | decimation drops the **forced** alt-exit entry | **survived** — see below |
 | 17 | the forced alt-exit checkpoint never taken | died — the e2e span test |
 | 18 | `title` not restored | died — the arbiter's title assertion |
@@ -555,6 +555,53 @@ would justify the sequence number cannot be written here.
 It belongs with the next sprint that changes the recorder, where a format
 version, a new field and L0's live-versus-replay checksum are all in scope
 together.
+
+## What the adversarial review found
+
+Four things, one of them serious, and the serious one is instructive because
+**every one of the eighteen mutants and all five gate criteria missed it.**
+
+**A refresh replayed placeholders in place of the prior events.** When the
+index is extended while the child is still printing, the builder is handed
+the events the state already holds and reads only the new bytes. It used
+`prior` for its *length* and filled that prefix with no-op ticks. So every
+checkpoint taken in the tail encoded the tail applied to a blank terminal;
+the seeked view failed this sprint's own arbiter (checksums differed, 53
+scrollback lines against 23); and every alt-screen span from before the
+refresh was lost — a second `Cmd ⇧ ↑` could no longer reach a `vim` that had
+closed before the first index build, which is the headline feature.
+
+The fix is one line: copy `prior` instead of overwriting it. The lesson is
+about the test, not the code. The refresh test's corpus was about a kilobyte
+against a 1 MiB interval, so the tail *never took a checkpoint of its own*;
+`before()` always answered with the empty-terminal entry at index 0, and the
+forward replay over the real events produced the right answer regardless.
+The arbiter was satisfied by a seek that happened to replay everything. The
+test now uses a 256-byte interval and asserts that a span from before the
+refresh survives it — the assertion that fails when the prefix is thrown
+away. **A test whose corpus cannot trigger the mechanism under test is not
+testing it**, however green it runs.
+
+**The shared field table never gave the saved cursor a colour.** The
+"saved cursor" case does `DECSC` with SGR at its defaults, so it exercises
+the saved *position* only. A codec that dropped `saved_cursor.fg` passed the
+whole suite. One row added to the table, in `check.zig`, so both files get it.
+Latent rather than live — the codec was right — but it is a hole in exactly
+the mechanism this record sells as the thing that stops a seek silently
+losing a field.
+
+**A mouse drag was not gated on seek mode.** `handleWheel` refuses to scroll
+while the window shows history, with a comment explaining why; the button and
+motion handlers one function over did not apply the same reasoning. A drag
+across a historical frame selected on the *live* terminal underneath —
+invisibly — and `Cmd C` then copied text the user could not see. Gated now,
+the same way.
+
+**Two rows of the mutation table were wrong.** One cited `nearest()`, which
+does not exist (it is `Index.before`, and it compares event indices, not byte
+positions); one named a killer that is not the test that fires. Both corrected.
+The table's substance held: the reviewer re-derived seven of the planted
+mutants from scratch and all seven died, most with two independent killers.
 
 ## Known limits, stated rather than hidden
 
