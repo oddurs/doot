@@ -9,6 +9,8 @@ const rec = @import("rec.zig");
 const check = @import("check.zig");
 const replay = @import("replay.zig");
 const sel = @import("sel.zig");
+const ckpt = @import("ckpt.zig");
+const seek = @import("seek.zig");
 const Terminal = @import("terminal.zig").Terminal;
 const Pty = @import("pty.zig").Pty;
 
@@ -927,4 +929,485 @@ test "a program taking the alt screen clears the selection" {
     try s.send("printf '\\033[?1049hALT\\n'\n");
     try testing.expect(try s.pumpUntil("ALT", 400));
     try testing.expect(s.term.selection == null);
+}
+
+// ---------------------------------------------------------------------------
+// L1: checkpoints and seek
+// ---------------------------------------------------------------------------
+//
+// L0's arbiter is one comparison: the live grid against a replay of the whole
+// log. L1's is a *family* of them, because a seek is two readings of the same
+// log and they have to agree at every point where they could disagree --
+// every checkpoint boundary, and several targets past each one.
+//
+// It compares more than the checksum. `check.zig` deliberately does not hash
+// `next_line_id`, the title, or a row's id: they are properties of this
+// terminal's history rather than of the byte stream, and hashing them would
+// manufacture divergences in L0's arbiter that say nothing about the
+// recording. But a *seek* has to restore all three, and for a reason with
+// teeth: a seek that minted ids colliding with ids already in the log would
+// make E1's selection resolve onto the wrong row, and no checksum in this
+// repository would notice. So the arbiter here checks the checksum **and**
+// the three things the checksum is blind to.
+
+/// Everything a seek has to reproduce, in one comparable value.
+const Print = struct {
+    sum: u64,
+    next_line_id: u64,
+    /// A hash over every row id, on both screens and through the whole ring.
+    /// The checksum is blind to these on purpose; a seek must not be.
+    ids: u64,
+    title: [128]u8 = @splat(0),
+    title_len: usize = 0,
+    cols: usize,
+    rows: usize,
+    sb_len: usize,
+    on_alt: bool,
+
+    fn of(term: *Terminal) Print {
+        var h = std.hash.Wyhash.init(0);
+        for ([_]*const grid.Screen{ &term.primary, &term.alt }) |s| {
+            for (0..s.rows) |y| {
+                const id = s.rowMeta(y).id;
+                h.update(std.mem.asBytes(&id));
+            }
+        }
+        for (0..term.scrollback.len) |i| {
+            const m = term.scrollback.backMeta(i) orelse break;
+            const id = m.id;
+            h.update(std.mem.asBytes(&id));
+        }
+        var p = Print{
+            .sum = check.checksum(term),
+            .next_line_id = term.next_line_id,
+            .ids = h.final(),
+            .cols = term.cols,
+            .rows = term.rows,
+            .sb_len = term.scrollback.len,
+            .on_alt = term.on_alt,
+        };
+        p.title_len = @min(term.title.items.len, p.title.len);
+        @memcpy(p.title[0..p.title_len], term.title.items[0..p.title_len]);
+        return p;
+    }
+
+    fn expectEqual(want: Print, got: Print) !void {
+        try testing.expectEqual(want.cols, got.cols);
+        try testing.expectEqual(want.rows, got.rows);
+        try testing.expectEqual(want.on_alt, got.on_alt);
+        try testing.expectEqual(want.sb_len, got.sb_len);
+        try testing.expectEqualStrings(
+            want.title[0..want.title_len],
+            got.title[0..got.title_len],
+        );
+        try testing.expectEqual(want.next_line_id, got.next_line_id);
+        try testing.expectEqual(want.ids, got.ids);
+        try testing.expectEqual(want.sum, got.sum);
+    }
+};
+
+/// Wrap raw bytes into a `.trec` the way a live session would have produced
+/// one: reads of a plausible size, a millisecond apart, through the **real**
+/// writer -- its redaction, its held read, its timestamp arithmetic. A
+/// hand-rolled file would test the codec against a log no recorder writes.
+fn synthesize(dir: []const u8, cols: u16, rows: u16, bytes: []const u8, chunk: usize) ![]u8 {
+    var w = try rec.Writer.open(testing.allocator, dir, .{ .cols = cols, .rows = rows });
+    defer w.deinit();
+    const path = try testing.allocator.dupe(u8, w.path);
+    errdefer testing.allocator.free(path);
+
+    var t = rec.nowNs();
+    var off: usize = 0;
+    while (off < bytes.len) {
+        const n = @min(chunk, bytes.len - off);
+        w.output(bytes[off..][0..n], t);
+        off += n;
+        t += std.time.ns_per_ms;
+    }
+    w.close(.clean);
+    return path;
+}
+
+/// The arbiter itself. For every checkpoint in the index and several targets
+/// after it, restore-and-replay-forward must equal replay-from-the-start.
+///
+/// Written as one forward walk plus one seek per target rather than a replay
+/// per target: the reference is O(events) instead of O(events × targets),
+/// which is what makes running it over eight corpora affordable in a Debug
+/// build.
+fn arbitrate(name: []const u8, path: []const u8, opts: ckpt.Options) !void {
+    const alloc = testing.allocator;
+    const bytes = try rec.readFile(alloc, path, 64 << 20);
+    defer alloc.free(bytes);
+    var session = try rec.parse(alloc, bytes);
+    defer session.deinit(alloc);
+    try testing.expect(session.events.len > 0);
+
+    var idx = try ckpt.build(alloc, session, opts);
+    defer idx.deinit();
+    // A corpus that produced one checkpoint would pass this test by not
+    // exercising it. Every corpus here is large enough for several.
+    try testing.expect(idx.entries.items.len >= 3);
+
+    var targets: std.ArrayList(usize) = .empty;
+    defer targets.deinit(alloc);
+    for (idx.entries.items) |e| {
+        // On the boundary, one past it, and far enough past it to have
+        // crossed a wrap, a scroll and (on the agent corpora) an alt-screen
+        // redraw.
+        for ([_]usize{ 0, 1, 2, 7, 31, 128 }) |d| {
+            try targets.append(alloc, @min(e.event_index + d, session.events.len));
+        }
+    }
+    try targets.append(alloc, session.events.len);
+    std.mem.sort(usize, targets.items, {}, std.sort.asc(usize));
+    var uniq: usize = 0;
+    for (targets.items) |t| {
+        if (uniq == 0 or targets.items[uniq - 1] != t) {
+            targets.items[uniq] = t;
+            uniq += 1;
+        }
+    }
+    const want = targets.items[0..uniq];
+
+    const prints = try alloc.alloc(Print, want.len);
+    defer alloc.free(prints);
+    {
+        var scratch = try Terminal.init(alloc, session.header.cols, session.header.rows);
+        defer scratch.deinit();
+        var parser: vt.Parser = .{};
+        var ev: usize = 0;
+        for (want, 0..) |t, k| {
+            while (ev < t) : (ev += 1) try replay.applyEvent(&scratch, &parser, session.events[ev]);
+            prints[k] = Print.of(&scratch);
+        }
+    }
+
+    // One view terminal, reused across every target -- which is what
+    // `seek.State` does. A decode that only worked into a freshly allocated
+    // terminal would pass a test that made a new one each time.
+    var view = try Terminal.init(alloc, session.header.cols, session.header.rows);
+    defer view.deinit();
+    for (want, 0..) |t, k| {
+        const at = idx.before(t) orelse {
+            std.debug.print("{s}: no checkpoint at or before event {d}\n", .{ name, t });
+            return error.NoCheckpointBefore;
+        };
+        const meta = try idx.restore(at, &view);
+        const from: usize = @intCast(meta.event_index);
+        try testing.expect(from <= t);
+        try replay.materializeInto(&view, session, from, t);
+        view.replies.clearRetainingCapacity();
+        prints[k].expectEqual(Print.of(&view)) catch |err| {
+            std.debug.print(
+                "{s}: event {d} via checkpoint {d} (at event {d}) diverged from a replay\n",
+                .{ name, t, at, from },
+            );
+            return err;
+        };
+    }
+}
+
+/// A `.trec` built by hand to contain, in one file, every kind of event the
+/// index builder has to get right -- and in particular the three that no
+/// corpus contains, because no corpus is a *recording*: a `resize` record, a
+/// `control` record, and a title.
+fn writeFixture(dir: []const u8) ![]u8 {
+    var w = try rec.Writer.open(testing.allocator, dir, .{ .cols = 40, .rows = 8 });
+    defer w.deinit();
+    const path = try testing.allocator.dupe(u8, w.path);
+    errdefer testing.allocator.free(path);
+
+    var t = rec.nowNs();
+    var buf: [128]u8 = undefined;
+
+    // Enough lines to push the screen's own ring past its start and fill a
+    // stretch of scrollback: a checkpoint of a rotated screen decoding as a
+    // rotated screen is one of this sprint's mutants.
+    for (0..400) |i| {
+        t += std.time.ns_per_ms;
+        w.output(try std.fmt.bufPrint(&buf, "fixture line {d:0>4} of the primary screen\r\n", .{i}), t);
+    }
+
+    // A trailing space carrying a colour and an attribute. `Cell.isBlank()`
+    // says this cell is blank -- it ignores fg and attrs -- and trimming by it
+    // would drop the cell and change the checksum.
+    t += std.time.ns_per_ms;
+    w.output("\x1b[31;4mCOLOURTAIL   ", t);
+    t += std.time.ns_per_ms;
+    w.output("\x1b[0m\r\n", t);
+
+    // Tab stops, a scroll region, a saved cursor, and five modes: everything
+    // `check.zig` hashes that is not a cell.
+    t += std.time.ns_per_ms;
+    w.output("\x1b[3g\x1b[2;7r\x1b[4;4H\x1b7\x1b[?7l\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b=", t);
+    t += std.time.ns_per_ms;
+    w.output("\x1b]0;fixture-title\x07", t);
+
+    // Two full-screen programs, each long enough that a checkpoint lands
+    // *inside* one -- which is what exercises `scrollback_unchanged`, the one
+    // identity claim in the format.
+    for (0..2) |pass| {
+        t += std.time.ns_per_ms;
+        w.output("\x1b[?1049h", t);
+        for (0..300) |i| {
+            t += std.time.ns_per_ms;
+            w.output(try std.fmt.bufPrint(
+                &buf,
+                "\x1b[{d};1H\x1b[3{d}mpass {d} frame {d:0>4} redraw\x1b[K",
+                .{ (i % 8) + 1, i % 8, pass, i },
+            ), t);
+        }
+        t += std.time.ns_per_ms;
+        w.output("\x1b[?1049l", t);
+        t += std.time.ns_per_ms;
+        w.output(try std.fmt.bufPrint(&buf, "back on the primary after pass {d}\r\n", .{pass}), t);
+    }
+
+    // A mid-stream resize, which throws the ring away and moves the epoch,
+    // and a `control` record, which is a terminal mutation with no bytes
+    // behind it. A builder that ignored either would diverge here.
+    t += std.time.ns_per_ms;
+    w.resize(60, 12, t);
+    for (0..200) |i| {
+        t += std.time.ns_per_ms;
+        w.output(try std.fmt.bufPrint(&buf, "after the resize, line {d:0>4}\r\n", .{i}), t);
+    }
+    t += std.time.ns_per_ms;
+    w.control(.full_reset, t);
+    for (0..200) |i| {
+        t += std.time.ns_per_ms;
+        w.output(try std.fmt.bufPrint(&buf, "after the reset, line {d:0>4}\r\n", .{i}), t);
+    }
+    // Ends mid-history rather than at a tidy boundary, and with a second
+    // title, so "seek to the end" is not the same event as "the last thing
+    // that happened to be a checkpoint".
+    t += std.time.ns_per_ms;
+    w.output("\x1b]0;fixture-done\x07\x1b[33mtail", t);
+
+    w.close(.clean);
+    return path;
+}
+
+test "L1: a seek from every checkpoint equals a replay from the start" {
+    var dir_buf: [256]u8 = undefined;
+    const dir = tempDir(&dir_buf, "l1-fixture");
+    defer removeTree(dir);
+
+    const path = try writeFixture(dir);
+    defer testing.allocator.free(path);
+
+    // A spacing far below the shipped 1 MiB, so a 40 KB fixture produces
+    // tens of checkpoints rather than one. The claim under test is about
+    // every boundary, not about the interval.
+    try arbitrate("fixture", path, .{ .interval = 4 << 10 });
+
+    // And again with a budget small enough to force decimation, because a
+    // decimated index is a different index and the arbiter has to hold over
+    // it too. `max_bytes` is what the builder derives its entry budget from.
+    try arbitrate("fixture (decimated)", path, .{
+        .interval = 2 << 10,
+        .max_bytes = 1 << 20,
+        .min_entries = 8,
+        .max_entries = 12,
+    });
+}
+
+test "L1: the arbiter holds over every bench corpus" {
+    // The corpora are the only inputs that put a checkpoint boundary
+    // somewhere nobody chose: mid-redraw, mid-wrap, between two halves of a
+    // CJK codepoint. `interval` is small so a 262 KB corpus yields tens of
+    // entries.
+    const Corpus = struct { name: []const u8, bytes: []const u8 };
+    const corpora = [_]Corpus{
+        .{ .name = "ascii", .bytes = @embedFile("corpus_ascii") },
+        .{ .name = "sgr", .bytes = @embedFile("corpus_sgr") },
+        .{ .name = "scroll", .bytes = @embedFile("corpus_scroll") },
+        .{ .name = "altscreen", .bytes = @embedFile("corpus_altscreen") },
+        .{ .name = "cjk", .bytes = @embedFile("corpus_cjk") },
+        .{ .name = "region", .bytes = @embedFile("corpus_region") },
+        .{ .name = "agent-claude", .bytes = @embedFile("corpus_agent_claude") },
+        .{ .name = "agent-stream", .bytes = @embedFile("corpus_agent_stream") },
+    };
+
+    var dir_buf: [256]u8 = undefined;
+    const dir = tempDir(&dir_buf, "l1-corpora");
+    defer removeTree(dir);
+
+    for (corpora) |c| {
+        // 1,024-byte reads, the size `rec.max_read` bounds a pty read to, so
+        // the events in the file are the shape a real session produces.
+        const path = try synthesize(dir, 80, 24, c.bytes, 1024);
+        defer testing.allocator.free(path);
+        // A sixteenth of the corpus, so every one of them -- including
+        // `agent-claude`, which is 8 KB -- yields a dozen or so checkpoints
+        // rather than the shipped 1 MiB spacing yielding exactly one.
+        try arbitrate(c.name, path, .{ .interval = @max(1024, c.bytes.len / 16) });
+    }
+}
+
+test "L1: seeking back into a closed full-screen program shows its last frame" {
+    // The sprint's whole claim, as an assertion: a program takes the alt
+    // screen, draws, exits -- and every other terminal throws that frame
+    // away the instant it does. Here it is still reachable, and reaching it
+    // is a decode of one checkpoint and no forward replay at all.
+    var dir_buf: [256]u8 = undefined;
+    const dir = tempDir(&dir_buf, "l1-e2e");
+    defer removeTree(dir);
+
+    var s = try Recorded.start(dir, 40, 8, .{ .cols = 0, .rows = 0 });
+    defer s.deinit();
+
+    try s.send("stty -echo; PS1=''\n");
+    _ = try s.pumpUntil("\x00", 250);
+    s.fullReset();
+
+    // Past the screen's own ring many times over and well into history, so
+    // the checkpoint is of a rotated screen over a non-empty scrollback.
+    try s.send("i=1; while [ $i -le 60 ]; do echo BEFORE$i; i=$((i+1)); done\n");
+    try testing.expect(try s.pumpUntil("BEFORE60", 2000));
+    try testing.expect(s.term.scrollback.len > 40);
+
+    // A colour left on, so the three spaces after the word are cells that
+    // `Cell.isBlank()` calls blank and `Cell.blank` does not equal. A codec
+    // that trimmed by the former loses them.
+    try s.send("printf '\\033[31;4mCOLOURTAIL   '; printf '\\033[0m\\n'\n");
+    try testing.expect(try s.pumpUntil("COLOURTAIL", 400));
+
+    // In and draw. The sentinel is on the alt screen and nowhere else, so
+    // finding it later is proof the frame came back rather than the primary.
+    try s.send("printf '\\033[?1049h'; printf 'ALT-SENTINEL-8823\\n'\n");
+    try testing.expect(try s.pumpUntil("ALT-SENTINEL-8823", 800));
+
+    // Out, as a **separate command**, and only after the frame above has
+    // been read. That is not tidiness: the index can only force a checkpoint
+    // at a whole pty read, so a program whose final repaint and whose
+    // `?1049l` arrive in the same read gets checkpointed one read early and
+    // the frame this test is about is the one before the interesting one.
+    // Written as one command it failed about one run in three, which is the
+    // caveat in `ckpt.build` reproducing itself.
+    try s.send("printf '\\033[?1049l'\n");
+    try testing.expect(try s.pumpUntil("COLOURTAIL", 800));
+    try testing.expect(!s.term.on_alt);
+    try testing.expect(!s.contains("ALT-SENTINEL-8823"));
+
+    try s.send("printf 'AFTER-THE-PROGRAM\\n'; printf 'TAIL-9911\\n'; exit\n");
+    s.drainAfterExit(600);
+    try testing.expect(s.contains("TAIL-9911"));
+
+    const live = check.checksum(&s.term);
+    s.rec.close(.clean);
+
+    // The index, built exactly as the worker builds it: off the file, with
+    // nothing but the file.
+    var st = seek.State{ .alloc = testing.allocator };
+    defer st.deinit();
+    var build = seek.Build{
+        .alloc = testing.allocator,
+        .path = try testing.allocator.dupeZ(u8, s.path),
+    };
+    seek.runBuild(&build);
+    try testing.expectEqual(@as(?anyerror, null), build.failed);
+    try st.absorb(&build);
+    build.deinit();
+    try testing.expectEqual(seek.Mode.live, st.mode);
+
+    const idx = &st.index.?;
+    // Exactly one: the shell entered the alt screen once and left once.
+    // "At least one" would pass with a builder that opened a span per read.
+    try testing.expectEqual(@as(usize, 1), idx.spans.items.len);
+    const span = idx.spans.items[0];
+    try testing.expect(span.exit_event > span.enter_event);
+
+    // `Cmd ⇧ ↑`.
+    try testing.expect(try st.prevSpan());
+    try testing.expectEqual(seek.Mode.seeking, st.mode);
+    try testing.expectEqual(span.exit_event, st.target);
+    // No forward replay: the index forces an entry at exactly this boundary.
+    try testing.expectEqual(@as(usize, 0), st.last_replayed);
+
+    const view = &st.view.?;
+    try testing.expect(view.on_alt);
+    try testing.expect(screenHas(view, "ALT-SENTINEL-8823"));
+    // The frame is the program's, not the shell's: what was underneath is
+    // still underneath, on the parked primary.
+    try testing.expect(!screenHas(view, "AFTER-THE-PROGRAM"));
+
+    // And it is the same terminal a replay from the start would have built.
+    // This is the arbiter, applied to the one seek a person can see.
+    {
+        var scratch = try replayTo(st.session(), st.target);
+        defer scratch.deinit();
+        try Print.of(&scratch).expectEqual(Print.of(view));
+    }
+
+    // Seek to the end of the log, which is the live screen -- the identity
+    // that makes "seek to now" mean anything.
+    try st.toEnd();
+    try testing.expectEqual(live, check.checksum(view));
+    try testing.expect(!view.on_alt);
+    try testing.expect(screenHas(view, "TAIL-9911"));
+
+    // Back to live is free and keeps the index, so the next seek is a decode.
+    st.toLive();
+    try testing.expectEqual(seek.Mode.live, st.mode);
+    try testing.expect(st.index != null);
+    try testing.expect(st.view != null);
+}
+
+/// Whether the active screen shows `needle`, searched across row boundaries
+/// for the reason `Recorded.contains` is: it is a screen, not a list of lines.
+fn screenHas(term: *Terminal, needle: []const u8) bool {
+    var buf: [64 * 1024]u8 = undefined;
+    var n: usize = 0;
+    for (0..term.rows) |y| {
+        for (term.screen().row(y)) |cell| {
+            if (cell.wide == .spacer) continue;
+            if (n + 4 > buf.len) break;
+            n += std.unicode.utf8Encode(cell.cp, buf[n..]) catch 0;
+        }
+    }
+    return std.mem.indexOf(u8, buf[0..n], needle) != null;
+}
+
+fn replayTo(session: rec.Session, to: usize) !Terminal {
+    var term = try Terminal.init(testing.allocator, session.header.cols, session.header.rows);
+    errdefer term.deinit();
+    try replay.materializeInto(&term, session, 0, to);
+    term.replies.clearRetainingCapacity();
+    return term;
+}
+
+test "L1: a session with no recording opens no file and says so" {
+    // `--no-record` and `--incognito` have nothing to seek in. The claim is
+    // not that the seek fails gracefully; it is that no descriptor is opened
+    // at all, which is what makes an incognito window incognito.
+    var dir_buf: [256]u8 = undefined;
+    const dir = tempDir(&dir_buf, "l1-none");
+    defer removeTree(dir);
+    try testing.expect(rec.makeDir(dir));
+
+    const before = try listing(testing.allocator, dir);
+    defer testing.allocator.free(before);
+
+    var w = rec.Writer.disabled(testing.allocator);
+    defer w.deinit();
+    try testing.expect(!w.recording);
+    try testing.expectEqual(@as(usize, 0), w.path.len);
+
+    var st = seek.State{ .alloc = testing.allocator };
+    defer st.deinit();
+    st.mode = .unavailable;
+    st.reason = "this window is incognito -- nothing is recorded";
+    try testing.expectError(error.NoIndex, st.seekTo(0));
+
+    var buf: [128]u8 = undefined;
+    try testing.expectEqualStrings(
+        "< this window is incognito -- nothing is recorded   esc: live",
+        seek.statusText(&buf, st.status()),
+    );
+
+    const after = try listing(testing.allocator, dir);
+    defer testing.allocator.free(after);
+    try testing.expectEqualStrings(before, after);
 }

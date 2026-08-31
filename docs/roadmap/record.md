@@ -154,26 +154,66 @@ otherwise fail its own checksum.
 
 ### L1 — Checkpoints and seek (two weeks)
 
-Every 4 MiB of output, or every minute, a checkpoint: the `Frame` copy
-plus the terminal's mode state, appended to a side index. Materializing
-time *T* is loading the nearest earlier checkpoint and replaying
-forward. A scrubber — `Cmd ⇧ ←/→` and a timeline drawn in the padding
-— moves the view through the session's history, including every frame
-of every alt-screen program it ran.
+**Done.** See [the sprint record](completed/sprint-l1-checkpoints.md).
+Seeking to any moment of a 98 MiB session at 200×60 costs a **19.2 ms p95**
+against the 150 ms the gate allows and the 50 ms this page asked for, over
+200 seeks; the "scroll back into a closed vim" demo is `Cmd ⇧ ↑`, one chord,
+and it is a decode of one checkpoint with **zero** events of forward replay.
+The arbiter is a family of comparisons rather than one: for every checkpoint
+in a fixture and in all eight bench corpora, and six targets after each,
+restore-plus-replay-forward equals replay-from-the-start — checksum,
+`next_line_id`, title and every row id.
 
-Scrollback stops being a data structure and becomes a query: the rows
-that scrolled off the primary screen, in order. [E7](essentials.md)'s
-scroll position and [E4](essentials.md)'s reflow become properties of
-a view, which is simpler than what they were.
+Five things this section had wrong, each written up in the record:
 
-*Done when:* seeking to any second of an hour-long recorded session
-materializes in under 50 ms at 200×60; the "scroll back into a closed
-vim" demo works; the golden checksum test passes at every checkpoint
-boundary.
+- **A `Frame` is not a checkpoint and could not be one.** It is the visible
+  viewport and a cursor: no history, no parked alternate screen, no modes, no
+  tab stops, no line ids, no title — and its cells come from `viewRow`, so
+  one taken while the user is scrolled back is not even the live screen.
+- **4 MiB was the wrong interval.** The "under 40 ms" arithmetic came from a
+  parse rate measured at 80×24. Measured at 200×60 — the geometry the budget
+  is stated at — the worst corpus runs at **70.7 MiB/s**, so 4 MiB is 56.6 ms
+  of replay against a 50 ms budget. It ships at **1 MiB**, which is 14.1 ms.
+- **"Or every minute" is the wrong second trigger**: a minute of an idle
+  session is zero bytes, and what makes a seek expensive is bytes to replay.
+  The one other trigger that ships is the read that *leaves* the alternate
+  screen, which is the frame the sprint exists for.
+- **"A side index" would have broken the deletion promise** above.
+  L1 writes **no bytes to disk**: record types 8 and 9 stay reserved and
+  unwritten, the index is in memory, and `rm` is still the whole of deleting
+  a session.
+- **Charset is a phantom.** `terminal.zig` has no charset state — `escDispatch`
+  returns early on any intermediate — so there was nothing to put in the
+  checkpoint.
 
-*Risk:* medium. Mode state that is not in the `Frame` — scroll region,
-saved cursor, tab stops, charset — must be in the checkpoint or replay
-diverges. The differential model ([T0](testing.md)) is the check.
+And one thing this page did not have at all, which decided the whole design:
+**redaction**. `redact.scrub` runs over a copy on the way into the recording
+and never over the bytes that reach the screen, so the live `Terminal` holds
+the unredacted form of every secret the `.trec` had taken out. Checkpointing
+it would put them back; scrubbing the checkpoint would make it unequal to the
+terminal it claims to be. So a checkpoint is **derived from the log**, on a
+worker thread, and everything else — the second `Terminal` a seek
+materializes into, the flush on entering seek mode, "seek to now is the live
+screen" as an identity that has to be proved — follows from that.
+
+The measurement that mattered most: a full-history checkpoint at 200×60 with
+the 10,000-line ring at capacity is **0.58 MB and 3.5 ms** to encode, against
+a design rule that said 2 MB or 20 ms would force a two-tier fallback. It does
+not fire. A checkpoint taken *while* a full-screen program is running is
+**3,889 bytes**, because the history has not moved.
+
+Scrollback did **not** stop being a data structure. Making every viewport row
+a replay is the opposite of a 50 ms materialize budget, and neither
+[E7](essentials.md)'s scroll position nor [E4](essentials.md)'s reflow is
+unblocked by anything L1 shipped. If that inversion is worth doing it is its
+own sprint with its own gate.
+
+*What it shipped:* `src/ckpt.zig` (the checkpoint codec and the in-memory
+index), `src/seek.zig` (the worker, the state and the status row),
+`replay.materializeInto`, `rec.parseFrom` and `rec.flushForSeek`, the
+`Cmd ⇧ ↑/↓/←/→` keys, `Esc` back to live, the seek status row as the bottom
+grid row, and `--seek` / `--seek-span` so the gallery can photograph a frame
+the live screen no longer has.
 
 ### L2 — Search over the record (one to two weeks)
 

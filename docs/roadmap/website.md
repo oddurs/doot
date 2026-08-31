@@ -25,10 +25,10 @@ cannot drift.
 
 | | Today | Where |
 |---|---|---|
-| Site | [oddurs.github.io/doot](https://oddurs.github.io/doot/), built by `site/build.py` into `site/out/` and deployed by Actions (W0, W1) | `.github/workflows/pages.yml` |
-| Screenshots | The gallery's references, and the front page's frame, rendered by the binary from a scene | `bench/gallery/`, `site/render.sh` |
+| Site | **None.** No Pages configuration, no `gh-pages` branch, repository homepage empty | `gh api repos/…/pages` → 404 |
+| Screenshots | **None in the repository.** `--screenshot` exists and is unused outside `--frame-stats` runs | `render.zig` |
 | Pitch | The README's first paragraph and the repository description | `README.md` |
-| Docs | Rendered at `/docs/…` by `site/build.py`, with the sprint records as `/log/` (W1) | `site/build.py` |
+| Docs | Fourteen files under `docs/`, readable only on GitHub | `docs/` |
 | Numbers | `bench/baseline.txt`, `--frame-stats` output in sprint records | `bench/`, `docs/roadmap/completed/` |
 | Changelog | `CHANGELOG.md`, Keep-a-Changelog form | — |
 | Name | `doot`, since [the rename](completed/sprint-n-rename-doot.md): four letters, no Homebrew or GitHub collision, `doot.sh` free at the time | — |
@@ -36,7 +36,7 @@ cannot drift.
 
 ## The sprints
 
-### W0 — The one page — **done**
+### W0 — The one page (one week)
 
 `site/index.html` and `site/site.css`, written by hand. No build step,
 no JavaScript, no web font — the system monospace, which is what the
@@ -76,14 +76,7 @@ screenshot is under 300 KB; it reads at 320 px wide; there is no
 *Risk:* low. The temptation is to add a second page; W1 is where that
 happens.
 
-*Result:* done — [oddurs.github.io/doot](https://oddurs.github.io/doot/).
-Lighthouse 100 / 100 / 100 / 100 under mobile emulation, 74,966 bytes
-with the image, no script tag, the homepage field set. The frame is a
-scene rendered by the binary itself (`site/hero.sh`, `site/render.sh`),
-and rendering it found two glyphs the system face lacks. See
-[the record](completed/sprint-w0-site.md).
-
-### W1 — Docs and the engineering log — **done**
+### W1 — Docs and the engineering log (one week)
 
 A generator, `site/build.py`, beside `bench/gen_corpus.py` and with the
 same rule — standard library only. It renders `docs/` to `/docs/…` and
@@ -109,12 +102,6 @@ record; the build fails on a broken link or an unknown construct.
 
 *Risk:* low. The Markdown subset is small because the docs are
 disciplined; keep both true.
-
-*Result:* done — [/docs/](https://oddurs.github.io/doot/docs/) and
-[/log/](https://oddurs.github.io/doot/log/). The subset was measured
-before it was written — every construct in every Markdown file counted —
-and 40 pages render with zero unsupported constructs, zero broken
-links and zero dead anchors. See [the record](completed/sprint-w1-docs.md).
 
 ### W2 — Numbers that are live (one week)
 

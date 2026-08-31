@@ -23,7 +23,7 @@ checked out. Check `git branch --show-current` before every commit anyway.
 ## Committing and merging
 
 - **One PR per concern**, title prefixed: `perf:`, `fix:`, `docs:`, `ci:`,
-  `bench:`, `gallery:`, `audit:`, `release:`, `guard:`, `security:`, `site:`.
+  `bench:`, `gallery:`, `audit:`, `release:`, `guard:`.
 - **Stage explicit paths.** Never `git add -A`: another session's
   uncommitted work may be sitting in the tree.
 - Squash merge, delete the branch. The commit body says *why*, and states

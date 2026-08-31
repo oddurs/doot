@@ -26,6 +26,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Scroll back into a closed `vim`.** `Cmd ⇧ ↑` shows the last frame of
+  the most recent full-screen program that exited; `Cmd ⇧ ←`/`→` step a
+  second at a time through the session; `Esc` returns to live. A seek is a
+  decode of the nearest checkpoint plus a replay of what followed, and
+  restoring a checkpoint then replaying forward is verified equal to
+  replaying from the start — checksum, line ids and title — for every
+  checkpoint in every bench corpus. Checkpoints are built from the session's
+  own recording on a worker thread, never from the live terminal, so a seek
+  can never show a byte the recording redacted. Nothing new is written to
+  disk: the index lives in memory, and deleting a session is still `rm`.
 - **Selection and copy.** Drag to select, double-click for a word,
   triple-click for a whole logical line across however many rows it wrapped
   onto, `Shift`-click to extend, `Option`-drag for a rectangle. `Cmd C`
@@ -128,14 +138,6 @@ All notable changes to this project are documented here. The format follows
 
 - A `colors-14pt-2x` gallery capture, so 2× has the same
   geometry/projection/clear/channel-order oracle 1× has.
-
-- **A website.** [oddurs.github.io/doot](https://oddurs.github.io/doot/):
-  one page, two hand-written files, no script, and a frame the terminal
-  rendered of itself. Deployed from `site/` by Actions.
-- **The docs and the engineering log, on the site.** `site/build.py`
-  renders `docs/` and `CONTRIBUTING.md` through a Markdown subset that
-  refuses what it does not know and checks every link; the completed
-  sprint records are `/log/`, newest first.
 
 ## [0.1.0] — 2026-08-28
 

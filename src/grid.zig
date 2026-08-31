@@ -298,6 +298,27 @@ pub const Scrollback = struct {
     capacity: usize,
     head: usize = 0,
     len: usize = 0,
+    /// How many lines have ever been pushed, and how many times the ring has
+    /// been thrown away. **Both live here rather than on `Terminal`** because
+    /// `push` already writes `head` and `len` in this struct: a counter beside
+    /// them costs no additional cache line, and one at the end of `Terminal`
+    /// -- where the E1 fields had to go -- would be touched on every line
+    /// feed, which is the hot path sprint R exists to keep clear.
+    ///
+    /// What they are for: L1's `scrollback_unchanged` flag. A checkpoint whose
+    /// `pushes` and `epoch` both equal the previous checkpoint's holds exactly
+    /// the same history, so it reuses the previous one's encoded scrollback
+    /// verbatim. That is an identity claim, not a delta -- there is no
+    /// eviction to reason about -- and it is what makes a checkpoint taken
+    /// while a full-screen program is running cost a screen rather than a ring.
+    ///
+    /// `pushes` counts real pushes: a zero-capacity ring returns early and
+    /// counts nothing, because nothing was kept.
+    pushes: u64 = 0,
+    /// Bumped by `clear`, and by `Terminal.resize` when the column count
+    /// changes and the ring is rebuilt. Two rings with the same `pushes` and
+    /// different epochs hold different lines.
+    epoch: u64 = 0,
     /// One per slot, moving with `push` so a line keeps its identity and its
     /// wrap flag on the way out of the screen. Without this a selection
     /// anchored to a line stops resolving the moment the line scrolls off,
@@ -330,6 +351,7 @@ pub const Scrollback = struct {
         self.meta[self.head] = meta;
         self.head = (self.head + 1) % self.capacity;
         if (self.len < self.capacity) self.len += 1;
+        self.pushes += 1;
     }
 
     /// Line `i` counting back from the most recent (0 = newest).
@@ -349,6 +371,7 @@ pub const Scrollback = struct {
     pub fn clear(self: *Scrollback) void {
         self.head = 0;
         self.len = 0;
+        self.epoch += 1;
     }
 };
 

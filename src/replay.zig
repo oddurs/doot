@@ -33,21 +33,21 @@ const Terminal = @import("terminal.zig").Terminal;
 /// The geometry comes from the header, not from the caller: a replay into a
 /// different-sized grid is a different session, and would fail the checksum
 /// for a reason that says nothing about the recording.
-pub fn materialize(alloc: std.mem.Allocator, session: rec.Session) !Terminal {
-    var term = try Terminal.init(alloc, session.header.cols, session.header.rows);
-    errdefer term.deinit();
-    var parser: vt.Parser = .{};
-
-    for (session.events) |e| switch (e.kind) {
+/// Apply one event to a terminal. **The whole of what a replay does**, in one
+/// place, so that L1's index builder and this file cannot disagree about it --
+/// a builder that applied `resize` differently would produce checkpoints the
+/// arbiter rejects, and the arbiter would be right.
+pub fn applyEvent(term: *Terminal, parser: *vt.Parser, e: rec.Event) !void {
+    switch (e.kind) {
         .output => {
-            parser.feed(&term, e.payload);
+            parser.feed(term, e.payload);
             // The live terminal drains these down the pty every frame. A
             // replay has nobody to send them to, and letting them pile up
             // for the length of a session would be a slow leak.
             term.replies.clearRetainingCapacity();
         },
         .resize => {
-            if (e.payload.len < 4) continue;
+            if (e.payload.len < 4) return;
             const cols = std.mem.readInt(u16, e.payload[0..2], .little);
             const rows = std.mem.readInt(u16, e.payload[2..4], .little);
             // Four bytes with no checksum behind them, handed straight to an
@@ -60,7 +60,7 @@ pub fn materialize(alloc: std.mem.Allocator, session: rec.Session) !Terminal {
             try term.resize(cols, rows);
         },
         .control => {
-            if (e.payload.len < 1) continue;
+            if (e.payload.len < 1) return;
             switch (@as(rec.Control, @enumFromInt(e.payload[0]))) {
                 .full_reset => term.fullReset(),
                 // A control this build does not know is from a newer writer.
@@ -70,8 +70,31 @@ pub fn materialize(alloc: std.mem.Allocator, session: rec.Session) !Terminal {
             }
         },
         else => {},
-    };
+    }
+}
 
+/// Replay events `[from, to)` **into a terminal the caller owns**, continuing
+/// from whatever state it is in.
+///
+/// This is L1's forward half: a checkpoint is decoded into a terminal and this
+/// carries it the rest of the way. Nothing here resets the terminal, and that
+/// is the point -- `from` is the checkpoint's `event_index`, and the two
+/// together are a seek.
+///
+/// The parser is fresh, which is only safe because the index refuses to take a
+/// checkpoint at a boundary where the parser was mid-sequence. See
+/// `vt.Parser.atGround`.
+pub fn materializeInto(term: *Terminal, session: rec.Session, from: usize, to: usize) !void {
+    var parser: vt.Parser = .{};
+    const hi = @min(to, session.events.len);
+    if (from >= hi) return;
+    for (session.events[from..hi]) |e| try applyEvent(term, &parser, e);
+}
+
+pub fn materialize(alloc: std.mem.Allocator, session: rec.Session) !Terminal {
+    var term = try Terminal.init(alloc, session.header.cols, session.header.rows);
+    errdefer term.deinit();
+    try materializeInto(&term, session, 0, session.events.len);
     return term;
 }
 

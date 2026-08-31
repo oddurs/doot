@@ -227,6 +227,22 @@ pub fn build(b: *std.Build) void {
     e2e_mod.addOptions("build_options", options);
     e2e_mod.linkSystemLibrary("sdl3", .{});
     e2e_mod.linkSystemLibrary("freetype2", .{});
+    // The same corpora the bench parses, wrapped into synthetic `.trec`
+    // files by L1's arbiter test. Real recorded sessions and generated
+    // stress cases are the only inputs that put a checkpoint boundary
+    // somewhere nobody chose by hand -- mid-sequence, mid-wrap, inside an
+    // alt-screen redraw -- which is precisely where a seek goes wrong.
+    inline for (corpus_names) |name| {
+        const import_name = "corpus_" ++ comptime blk: {
+            var buf: [name.len]u8 = undefined;
+            for (name, 0..) |ch, i| buf[i] = if (ch == '-') '_' else ch;
+            const final = buf;
+            break :blk &final;
+        };
+        e2e_mod.addAnonymousImport(import_name, .{
+            .root_source_file = b.path("bench/corpus/" ++ name ++ ".bin"),
+        });
+    }
     const e2e_tests = b.addTest(.{ .root_module = e2e_mod });
     test_step.dependOn(&b.addRunArtifact(e2e_tests).step);
 }

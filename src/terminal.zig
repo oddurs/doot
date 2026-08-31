@@ -254,7 +254,16 @@ pub const Terminal = struct {
         self.alt = new_alt;
 
         if (c != self.cols) {
-            const sb = try grid.Scrollback.init(self.alloc, c, scrollback_lines);
+            var sb = try grid.Scrollback.init(self.alloc, c, scrollback_lines);
+            // The counters describe the *terminal's* history, not this
+            // allocation's, so they survive the ring being rebuilt: `pushes`
+            // carries on where it was and `epoch` moves, which is exactly the
+            // "the history you are holding is no longer the history I have"
+            // signal L1's `scrollback_unchanged` needs. Resetting them here
+            // would let a checkpoint taken after a width change claim the
+            // scrollback of one taken before it.
+            sb.pushes = self.scrollback.pushes;
+            sb.epoch = self.scrollback.epoch + 1;
             self.scrollback.deinit(self.alloc);
             self.scrollback = sb;
             self.alloc.free(self.tabstops);

@@ -41,6 +41,7 @@ const stats = @import("stats.zig");
 const png = @import("png.zig");
 const sel = @import("sel.zig");
 const cli = @import("cli.zig");
+const seek = @import("seek.zig");
 const Terminal = @import("terminal.zig").Terminal;
 
 pub const c = @cImport({
@@ -76,8 +77,23 @@ pub const Frame = struct {
     /// released. Resolving here costs one `contains` test per row, inside a
     /// lock that is already memcpying twelve thousand cells.
     sel: []sel.Span = &.{},
+    /// L1's seek status row, or empty when the window is live.
+    ///
+    /// **Cells, not an overlay.** The main thread builds one row's worth in
+    /// `seek.zig` and this replaces the bottom row of the snapshot with it, so
+    /// the status row goes through the same background runs, the same atlas
+    /// and the same single draw call as every other row. An overlay would have
+    /// been a second text renderer, and a second text renderer is a second
+    /// thing that can disagree with the first about what a cell looks like.
+    ///
+    /// Renderer-owned, exactly like `cells`: `draw` runs after the terminal
+    /// mutex is released and must not be able to see terminal memory.
+    status: []grid.Cell = &.{},
 
     fn row(self: *const Frame, y: usize) []const grid.Cell {
+        if (self.status.len == self.cols and self.rows > 0 and y == self.rows - 1) {
+            return self.status;
+        }
         return self.cells[y * self.cols ..][0..self.cols];
     }
 };
@@ -114,6 +130,10 @@ pub const Renderer = struct {
     /// was taken on is not a reference.
     capture_w: u32 = 0,
     capture_h: u32 = 0,
+    /// Backing store for `Frame.status`. Owned here rather than in `Frame`
+    /// because `snapshot` clears the frame's reference to it every frame and
+    /// only `setStatus` puts it back.
+    status_buf: []grid.Cell = &.{},
     /// The frame's geometry, rebuilt every draw and submitted in one call.
     verts: std.ArrayList(gpu.Vertex) = .empty,
     indices: std.ArrayList(u32) = .empty,
@@ -260,6 +280,7 @@ pub const Renderer = struct {
         self.indices.deinit(self.atlas.alloc);
         self.atlas.alloc.free(self.frame.cells);
         self.atlas.alloc.free(self.frame.sel);
+        self.atlas.alloc.free(self.status_buf);
         self.gpu.destroy();
         self.atlas.deinit();
         self.font.deinit();
@@ -389,6 +410,12 @@ pub const Renderer = struct {
                 .{};
         }
 
+        // A snapshot is of one terminal at one moment, and the status row
+        // belongs to the *window*. Dropping the reference here means a frame
+        // is never accidentally still wearing the last seek's row; the buffer
+        // itself is `status_buf` and is not freed.
+        self.frame.status = &.{};
+
         self.frame.cursor = null;
         if (!term.modes.cursor_visible) return;
         // Scrolled back into history, the cursor isn't where you're looking.
@@ -399,6 +426,36 @@ pub const Renderer = struct {
             .y = term.cursor.y,
             .cell = term.screen().at(term.cursor.x, term.cursor.y).*,
         };
+    }
+
+    /// Replace the bottom row of the last snapshot with L1's status row.
+    ///
+    /// Call after `snapshot`, with the terminal mutex **released**: nothing
+    /// here reads terminal state, and the text was built by the main thread
+    /// out of the view terminal, which the main thread owns outright.
+    ///
+    /// On allocation failure the row is simply not drawn -- a seek with no
+    /// status row is worse than one with it, and better than no frame.
+    pub fn setStatus(self: *Renderer, text: []const u8) void {
+        const cols = self.frame.cols;
+        if (cols == 0 or self.frame.rows == 0) return;
+        if (self.status_buf.len != cols) {
+            const cells = self.atlas.alloc.alloc(grid.Cell, cols) catch return;
+            self.atlas.alloc.free(self.status_buf);
+            self.status_buf = cells;
+        }
+        seek.paintStatus(self.status_buf, text);
+        self.frame.status = self.status_buf;
+        // The selection cannot be over the status row: it is not the
+        // terminal's row, and a highlight on it would be highlighting chrome.
+        if (self.frame.sel.len == self.frame.rows) {
+            self.frame.sel[self.frame.rows - 1] = .{};
+        }
+        // Nor can the cursor sit on it. A cursor drawn over the bar would be
+        // the one place the "it is just another row" trick shows.
+        if (self.frame.cursor) |cur| {
+            if (cur.y == self.frame.rows - 1) self.frame.cursor = null;
+        }
     }
 
     /// Render the last snapshot and present it. Call with the terminal mutex

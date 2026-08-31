@@ -199,7 +199,7 @@ paravirtual device. A `MTLStorageModeManaged` branch with a
 `synchronizeTexture:` would be code that cannot be exercised anywhere,
 and untested code that looks correct is worse than an explicit boundary:
 require unified memory and say so if it is ever absent. Revisit only if
-[D5](#d5--one-binary-one-week) adds an x86_64 row, which would make it testable.
+[D5](#d5--one-binary) adds an x86_64 row, which would make it testable.
 
 The sprint's second unknown is separate: its *done when* asks that
 "`render.zig` contains no `SDL_` symbol", which cannot hold inside D0's
